@@ -14,6 +14,9 @@ type lifecycleStub struct {
 	upRequests []machine.Request
 	stopped    []string
 	destroyed  []string
+	upErr      error
+	stopErr    error
+	destroyErr error
 }
 
 func (lifecycle *lifecycleStub) Up(
@@ -21,17 +24,17 @@ func (lifecycle *lifecycleStub) Up(
 	request machine.Request,
 ) (machine.UpResult, error) {
 	lifecycle.upRequests = append(lifecycle.upRequests, request)
-	return machine.UpResult{Created: true}, nil
+	return machine.UpResult{Created: true}, lifecycle.upErr
 }
 
 func (lifecycle *lifecycleStub) Stop(_ context.Context, machineName string) error {
 	lifecycle.stopped = append(lifecycle.stopped, machineName)
-	return nil
+	return lifecycle.stopErr
 }
 
 func (lifecycle *lifecycleStub) Destroy(_ context.Context, machineName string) error {
 	lifecycle.destroyed = append(lifecycle.destroyed, machineName)
-	return nil
+	return lifecycle.destroyErr
 }
 
 func TestUpResolvesProjectAndUsesEffectiveResources(t *testing.T) {

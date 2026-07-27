@@ -40,6 +40,7 @@ type stateStoreStub struct {
 	project   state.Project
 	loadErr   error
 	saved     []state.Project
+	saveErr   error
 	deleted   []string
 	deleteErr error
 }
@@ -50,7 +51,7 @@ func (store *stateStoreStub) Load(string) (state.Project, error) {
 
 func (store *stateStoreStub) Save(project state.Project) error {
 	store.saved = append(store.saved, project)
-	return nil
+	return store.saveErr
 }
 
 func (store *stateStoreStub) Delete(machineName string) error {
