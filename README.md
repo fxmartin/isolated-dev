@@ -21,7 +21,6 @@ packages = ["nodejs"]
 [resources]
 cpus = 4
 memory_gb = 8
-disk_gb = 64
 
 [[ports]]
 name = "web"
@@ -77,7 +76,13 @@ The current Apple Container 1.x integration uses a read-write full-home mount.
 The active `home` mount scope is recorded in project state and reported by
 `status`. Existing machines remain pinned to their original image and resource
 settings; change those settings only by explicitly destroying and recreating
-the machine.
+the machine. Because Apple Container Machine 1.1.0 cannot mount an arbitrary
+host path, `up` rejects repositories outside the canonical home directory
+before changing lifecycle state.
+
+Apple Container Machine 1.1.0 does not expose disk allocation during machine
+creation, so `disk_gb` is not a supported configuration field and status does
+not present a disk size as applied or pinned.
 
 Stopping preserves the machine and its persistent guest data:
 

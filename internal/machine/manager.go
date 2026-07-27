@@ -30,10 +30,15 @@ type DockerWaiter interface {
 	WaitDocker(context.Context, string) error
 }
 
+type ImageEnsurer interface {
+	EnsureReference(context.Context, string) error
+}
+
 type Manager struct {
 	Runner       Runner
 	StateStore   StateStore
 	DockerWaiter DockerWaiter
+	ImageEnsurer ImageEnsurer
 	BootTries    int
 	RetryDelay   time.Duration
 	Sleep        func(time.Duration)
@@ -87,6 +92,11 @@ func (manager Manager) Up(ctx context.Context, request Request) (UpResult, error
 
 	created := false
 	if !exists {
+		if manager.ImageEnsurer != nil {
+			if err := manager.ImageEnsurer.EnsureReference(ctx, request.BaseImage); err != nil {
+				return UpResult{}, fmt.Errorf("ensure base image: %w", err)
+			}
+		}
 		if errors.Is(loadErr, state.ErrNotFound) {
 			if err := manager.StateStore.Save(request.projectState()); err != nil {
 				return UpResult{}, fmt.Errorf("record project state: %w", err)

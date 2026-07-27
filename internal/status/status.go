@@ -29,10 +29,9 @@ func Write(writer io.Writer, snapshot Snapshot) error {
 		"Mount scope: " + snapshot.MountScope,
 		"Tunnel: " + snapshot.TunnelStatus,
 		fmt.Sprintf(
-			"Resources: %d CPU, %d GB memory, %d GB disk",
+			"Resources: %d CPU, %d GB memory",
 			snapshot.Config.Resources.CPUs,
 			snapshot.Config.Resources.MemoryGB,
-			snapshot.Config.Resources.DiskGB,
 		),
 	}
 	for _, port := range snapshot.Config.Ports {

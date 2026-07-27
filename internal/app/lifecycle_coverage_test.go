@@ -90,7 +90,12 @@ func TestUpReportsBoundaryFailures(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := test.application(t).Up(context.Background(), test.projectPath(t))
+			path := test.projectPath(t)
+			application := test.application(t)
+			if path != "" {
+				application.HomeDir = filepath.Dir(path)
+			}
+			_, err := application.Up(context.Background(), path)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Up() error = %v, want containing %q", err, test.want)
 			}

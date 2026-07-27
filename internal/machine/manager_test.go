@@ -64,6 +64,19 @@ type dockerWaiterStub struct {
 	err      error
 }
 
+type imageEnsurerStub struct {
+	references []string
+	err        error
+}
+
+func (ensurer *imageEnsurerStub) EnsureReference(
+	_ context.Context,
+	reference string,
+) error {
+	ensurer.references = append(ensurer.references, reference)
+	return ensurer.err
+}
+
 func (waiter *dockerWaiterStub) WaitDocker(_ context.Context, machineName string) error {
 	waiter.machines = append(waiter.machines, machineName)
 	return waiter.err
@@ -80,10 +93,12 @@ func TestUpCreatesMissingMachineAndRetriesTransientBoot(t *testing.T) {
 	}}
 	store := &stateStoreStub{loadErr: state.ErrNotFound}
 	docker := &dockerWaiterStub{}
+	images := &imageEnsurerStub{}
 	manager := Manager{
 		Runner:       runner,
 		StateStore:   store,
 		DockerWaiter: docker,
+		ImageEnsurer: images,
 		BootTries:    2,
 		RetryDelay:   time.Nanosecond,
 		Sleep:        func(time.Duration) {},
@@ -111,6 +126,9 @@ func TestUpCreatesMissingMachineAndRetriesTransientBoot(t *testing.T) {
 	if !reflect.DeepEqual(docker.machines, []string{request.MachineName}) {
 		t.Errorf("Docker waiter machines = %#v", docker.machines)
 	}
+	if !reflect.DeepEqual(images.references, []string{request.BaseImage}) {
+		t.Errorf("ensured images = %#v, want %q", images.references, request.BaseImage)
+	}
 
 	wantCreate := []string{
 		"machine", "create",
@@ -122,6 +140,40 @@ func TestUpCreatesMissingMachineAndRetriesTransientBoot(t *testing.T) {
 	}
 	if got := runner.calls[1].args; !reflect.DeepEqual(got, wantCreate) {
 		t.Errorf("create args = %#v, want %#v", got, wantCreate)
+	}
+}
+
+func TestUpDoesNotRecordStateWhenBaseImageEnsureFails(t *testing.T) {
+	t.Parallel()
+
+	runner := &runnerStub{responses: []response{{output: []byte("[]")}}}
+	store := &stateStoreStub{loadErr: state.ErrNotFound}
+	images := &imageEnsurerStub{err: errors.New("build failed")}
+	manager := Manager{
+		Runner:       runner,
+		StateStore:   store,
+		DockerWaiter: &dockerWaiterStub{},
+		ImageEnsurer: images,
+	}
+	request := Request{
+		ProjectPath:      "/Users/fx/dev/app",
+		MachineName:      "isolated-dev-app-abcd1234",
+		BaseImage:        "local/isolated-dev-base:1",
+		BaseImageVersion: "1",
+		CPUs:             4,
+		MemoryGB:         8,
+		MountScope:       "home",
+	}
+
+	_, err := manager.Up(context.Background(), request)
+	if err == nil || !strings.Contains(err.Error(), "ensure base image") {
+		t.Fatalf("Up() error = %v, want base-image ensure failure", err)
+	}
+	if len(store.saved) != 0 {
+		t.Fatalf("saved state = %+v, want no state before image is available", store.saved)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("runner calls = %+v, want only machine lookup", runner.calls)
 	}
 }
 

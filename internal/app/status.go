@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/fxmartin/isolated-dev/internal/config"
@@ -26,6 +28,8 @@ type App struct {
 	HostChecker    host.Checker
 	StateStore     state.Store
 	MachineManager MachineManager
+	HomeDir        string
+	WarningOutput  io.Writer
 }
 
 func (app App) Status(ctx context.Context, projectPath string, output io.Writer) error {
@@ -81,6 +85,17 @@ func (app App) Up(ctx context.Context, projectPath string) (machine.UpResult, er
 	if app.MachineManager == nil {
 		return machine.UpResult{}, errors.New("machine lifecycle is not configured")
 	}
+	if err := app.validateHomeMountedProject(resolved.Path); err != nil {
+		return machine.UpResult{}, err
+	}
+	if app.WarningOutput != nil {
+		if _, err := fmt.Fprintln(
+			app.WarningOutput,
+			"warning: this machine receives read-write access to your full home directory",
+		); err != nil {
+			return machine.UpResult{}, fmt.Errorf("write full-home mount warning: %w", err)
+		}
+	}
 	return app.MachineManager.Up(ctx, machine.Request{
 		ProjectPath:      resolved.Path,
 		MachineName:      resolved.MachineName,
@@ -90,6 +105,35 @@ func (app App) Up(ctx context.Context, projectPath string) (machine.UpResult, er
 		MemoryGB:         effectiveConfig.Resources.MemoryGB,
 		MountScope:       "home",
 	})
+}
+
+func (app App) validateHomeMountedProject(projectPath string) error {
+	homeDir := app.HomeDir
+	if homeDir == "" {
+		var err error
+		homeDir, err = os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("resolve home directory: %w", err)
+		}
+	}
+	canonicalHome, err := filepath.EvalSymlinks(homeDir)
+	if err != nil {
+		return fmt.Errorf("resolve home directory %q: %w", homeDir, err)
+	}
+	relative, err := filepath.Rel(canonicalHome, projectPath)
+	if err != nil {
+		return fmt.Errorf("compare project and home directories: %w", err)
+	}
+	if relative == ".." ||
+		strings.HasPrefix(relative, ".."+string(filepath.Separator)) ||
+		filepath.IsAbs(relative) {
+		return fmt.Errorf(
+			"project %q is outside the mounted home directory %q; Apple Container Machine 1.1.0 cannot expose it, so move the repository under your home directory before running up",
+			projectPath,
+			canonicalHome,
+		)
+	}
+	return nil
 }
 
 func (app App) Stop(ctx context.Context, projectPath string) error {

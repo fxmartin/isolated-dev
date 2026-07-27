@@ -26,12 +26,14 @@ func main() {
 		Runner:       runner,
 		StateStore:   store,
 		DockerWaiter: imageManager,
+		ImageEnsurer: imageManager,
 	}
 	application := app.App{
 		Version:        version,
 		HostChecker:    host.DefaultChecker(),
 		StateStore:     store,
 		MachineManager: machineManager,
+		WarningOutput:  os.Stderr,
 	}
 	os.Exit(cli.Run(os.Args[1:], cli.Dependencies{
 		Stdout:  os.Stdout,

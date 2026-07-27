@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -80,6 +81,49 @@ func TestEnsureBuildsMissingImageOnce(t *testing.T) {
 	}
 	if got := runner.calls[1].args; !reflect.DeepEqual(got, wantBuildArgs) {
 		t.Errorf("build args = %#v, want %#v", got, wantBuildArgs)
+	}
+}
+
+func TestEnsureReferenceBuildsMissingManagedImageFromEmbeddedContext(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{responses: []fakeResponse{
+		{err: errors.New("image not found")},
+		{},
+	}}
+	manager := Manager{Runner: runner}
+
+	if err := manager.EnsureReference(
+		context.Background(),
+		"local/isolated-dev-base:2",
+	); err != nil {
+		t.Fatalf("EnsureReference() error = %v", err)
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("calls = %+v, want inspect and build", runner.calls)
+	}
+	buildArgs := runner.calls[1].args
+	if buildArgs[0] != "build" ||
+		buildArgs[2] != "local/isolated-dev-base:2" ||
+		!strings.HasSuffix(buildArgs[8], "/Dockerfile") {
+		t.Fatalf("build args = %#v, want managed image and materialized Dockerfile", buildArgs)
+	}
+}
+
+func TestEnsureReferenceLeavesExternalImagesToMachineCreate(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{}
+	manager := Manager{Runner: runner}
+
+	if err := manager.EnsureReference(
+		context.Background(),
+		"registry.example.com/team/base:2",
+	); err != nil {
+		t.Fatalf("EnsureReference() error = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("calls = %+v, want external image handled by machine create", runner.calls)
 	}
 }
 

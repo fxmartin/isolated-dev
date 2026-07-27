@@ -1,9 +1,11 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/fxmartin/isolated-dev/internal/host"
@@ -40,21 +42,25 @@ func (lifecycle *lifecycleStub) Destroy(_ context.Context, machineName string) e
 func TestUpResolvesProjectAndUsesEffectiveResources(t *testing.T) {
 	t.Parallel()
 
-	repository := t.TempDir()
-	if err := os.Mkdir(filepath.Join(repository, ".git"), 0o755); err != nil {
+	home := t.TempDir()
+	repository := filepath.Join(home, "app")
+	if err := os.MkdirAll(filepath.Join(repository, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
 	if err := os.WriteFile(
 		filepath.Join(repository, ".isolated-dev.toml"),
-		[]byte("version = 1\n[resources]\ncpus = 6\nmemory_gb = 12\ndisk_gb = 80\n"),
+		[]byte("version = 1\n[resources]\ncpus = 6\nmemory_gb = 12\n"),
 		0o600,
 	); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	lifecycle := &lifecycleStub{}
+	var warnings bytes.Buffer
 	application := App{
 		HostChecker:    passingHostChecker(),
 		MachineManager: lifecycle,
+		HomeDir:        home,
+		WarningOutput:  &warnings,
 	}
 
 	result, err := application.Up(context.Background(), repository)
@@ -80,6 +86,32 @@ func TestUpResolvesProjectAndUsesEffectiveResources(t *testing.T) {
 	}
 	if request.MountScope != "home" {
 		t.Errorf("MountScope = %q, want home fallback", request.MountScope)
+	}
+	if !strings.Contains(warnings.String(), "read-write access to your full home directory") {
+		t.Errorf("warning = %q, want full-home exposure warning", warnings.String())
+	}
+}
+
+func TestUpRejectsRepositoryOutsideHomeBeforeLifecycleMutation(t *testing.T) {
+	t.Parallel()
+
+	repository := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repository, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	lifecycle := &lifecycleStub{}
+	application := App{
+		HostChecker:    passingHostChecker(),
+		MachineManager: lifecycle,
+		HomeDir:        t.TempDir(),
+	}
+
+	_, err := application.Up(context.Background(), repository)
+	if err == nil || !strings.Contains(err.Error(), "outside the mounted home directory") {
+		t.Fatalf("Up() error = %v, want unsupported out-of-home repository guidance", err)
+	}
+	if len(lifecycle.upRequests) != 0 {
+		t.Fatalf("up requests = %+v, want no lifecycle mutation", lifecycle.upRequests)
 	}
 }
 

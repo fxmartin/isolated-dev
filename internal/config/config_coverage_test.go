@@ -41,11 +41,6 @@ func TestValidateRejectsUnsafeEffectiveConfiguration(t *testing.T) {
 			want:   "resources.memory_gb",
 		},
 		{
-			name:   "disk",
-			mutate: func(cfg *Config) { cfg.Resources.DiskGB = 0 },
-			want:   "resources.disk_gb",
-		},
-		{
 			name: "empty port name",
 			mutate: func(cfg *Config) {
 				cfg.Ports = []Port{{Guest: 3000, Host: 3000}}
@@ -147,20 +142,5 @@ host = 3100
 	_, err := Load(projectDir)
 	if err == nil || !strings.Contains(err.Error(), "no matching shared port") {
 		t.Fatalf("Load() error = %v, want unmatched local port", err)
-	}
-}
-
-func TestMergeLocalAppliesDiskOverride(t *testing.T) {
-	t.Parallel()
-
-	cfg := Defaults()
-	disk := 96
-	if err := mergeLocal(&cfg, localConfig{
-		Resources: localResources{DiskGB: &disk},
-	}); err != nil {
-		t.Fatalf("mergeLocal() error = %v", err)
-	}
-	if cfg.Resources.DiskGB != disk {
-		t.Fatalf("DiskGB = %d, want %d", cfg.Resources.DiskGB, disk)
 	}
 }
