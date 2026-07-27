@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+if /usr/bin/docker info >/dev/null 2>&1; then
+    exit 0
+fi
+
+if [[ -f /var/run/docker.pid ]]; then
+    docker_pid="$(< /var/run/docker.pid)"
+    if [[ "${docker_pid}" =~ ^[0-9]+$ ]] && kill -0 "${docker_pid}" 2>/dev/null; then
+        for _ in {1..30}; do
+            if /usr/bin/docker info >/dev/null 2>&1; then
+                exit 0
+            fi
+            sleep 1
+        done
+        exit 1
+    fi
+    rm -f /var/run/docker.pid
+fi
+
+exec /usr/bin/dockerd \
+    --host=unix:///var/run/docker.sock \
+    --storage-driver=overlay2

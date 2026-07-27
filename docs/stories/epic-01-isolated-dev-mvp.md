@@ -36,23 +36,25 @@ guest-only state.
 
 ## Feature Breakdown
 
-- **CLI and configuration:** Stories 01.1-01.2
-- **Guest platform and lifecycle:** Stories 01.3-01.5 and 01.9
-- **Developer workflow:** Stories 01.6-01.8
-- **Integration and release:** Stories 01.10-01.13
+- **CLI and configuration:** Stories 01.1-001 and 01.2-001
+- **Guest platform and lifecycle:** Stories 01.3-001 through 01.5-001 and
+  01.9-001
+- **Developer workflow:** Stories 01.6-001 through 01.8-001
+- **Integration and release:** Stories 01.10-001 through 01.13-001
 
 ## Stories
 
-### Story 01.1: Establish the Go CLI and Configuration Model
+#### Story 01.1-001: Establish the Go CLI and Configuration Model
 
 **Value:** Provide a testable host application with deterministic,
 implementation-ready configuration behavior.
 
-- **Points:** 5
-- **Risk:** Medium
-- **Dependencies:** None
+**Priority**: Must Have
+**Story Points**: 5
+**Risk**: Medium
+**Dependencies**: None
 
-**Acceptance Criteria**
+##### Acceptance Criteria
 
 - Given the binary, when `--version` is invoked, then it reports its version
   without changing host or machine state.
@@ -64,15 +66,22 @@ implementation-ready configuration behavior.
 - Given no configuration files, when a command starts, then documented defaults
   produce a valid effective configuration.
 
-### Story 01.2: Validate Host Prerequisites and Track Project State
+##### Definition of Done
+
+- [x] Code implemented and reviewed
+- [x] Tests written and passing
+- [x] Documentation updated
+
+#### Story 01.2-001: Validate Host Prerequisites and Track Project State
 
 **Value:** Fail safely and associate every operation with the intended project.
 
-- **Points:** 3
-- **Risk:** Low
-- **Dependencies:** Story 01.1
+**Priority**: Must Have
+**Story Points**: 3
+**Risk**: Low
+**Dependencies**: 01.1-001
 
-**Acceptance Criteria**
+##### Acceptance Criteria
 
 - Given a repository path, when it is resolved, then the CLI derives a stable,
   collision-resistant machine identity from its canonical path.
@@ -83,15 +92,22 @@ implementation-ready configuration behavior.
   base-image, machine, effective-configuration, mount, and tunnel state without
   exposing secret values.
 
-### Story 01.3: Build and Cache the Versioned Guest Base Image
+##### Definition of Done
+
+- [x] Code implemented and reviewed
+- [x] Tests written and passing
+- [x] Documentation updated
+
+#### Story 01.3-001: Build and Cache the Versioned Guest Base Image
 
 **Value:** Avoid reinstalling common tooling for every project machine.
 
-- **Points:** 5
-- **Risk:** High
-- **Dependencies:** Stories 01.1-01.2
+**Priority**: Must Have
+**Story Points**: 5
+**Risk**: High
+**Dependencies**: 01.1-001, 01.2-001
 
-**Acceptance Criteria**
+##### Acceptance Criteria
 
 - Given no cached image for the selected version, when it is requested, then an
   Ubuntu 24.04 image is built with Docker Engine, Compose v2, Git, SSH,
@@ -104,15 +120,22 @@ implementation-ready configuration behavior.
 - Given a ready guest, when `docker info` runs, then it confirms a functional
   daemon using cgroup v2 and `overlay2`.
 
-### Story 01.4: Implement Safe Project-Machine Lifecycle
+##### Definition of Done
+
+- [x] Code implemented and reviewed
+- [x] Tests written and passing
+- [x] Documentation updated
+
+#### Story 01.4-001: Implement Safe Project-Machine Lifecycle
 
 **Value:** Make project environments persistent, repeatable, and removable.
 
-- **Points:** 8
-- **Risk:** High
-- **Dependencies:** Stories 01.2-01.3
+**Priority**: Must Have
+**Story Points**: 8
+**Risk**: High
+**Dependencies**: 01.2-001, 01.3-001
 
-**Acceptance Criteria**
+##### Acceptance Criteria
 
 - Given no project machine, when `up` runs, then it creates one from the pinned
   base image, mounts the source, waits for readiness, and records state.
@@ -126,16 +149,23 @@ implementation-ready configuration behavior.
   data is removed; when confirmed, only the resolved project machine is
   deleted.
 
-### Story 01.5: Configure Guest Identity, Mounts, and Credentials
+##### Definition of Done
+
+- [ ] Code implemented and reviewed
+- [ ] Tests written and passing
+- [ ] Documentation updated
+
+#### Story 01.5-001: Configure Guest Identity, Mounts, and Credentials
 
 **Value:** Preserve source ownership and usable credentials without routine
 root access or copied private keys.
 
-- **Points:** 5
-- **Risk:** High
-- **Dependencies:** Stories 01.3-01.4
+**Priority**: Must Have
+**Story Points**: 5
+**Risk**: High
+**Dependencies**: 01.3-001, 01.4-001
 
-**Acceptance Criteria**
+##### Acceptance Criteria
 
 - Given a new machine, when provisioning completes, then a non-root guest user
   matches the invoking macOS UID/GID and has passwordless sudo and Docker-group
@@ -152,15 +182,22 @@ root access or copied private keys.
   its existence is checked and its contents are never parsed, copied, or
   logged.
 
-### Story 01.6: Integrate Managed SSH Access with Zed
+##### Definition of Done
+
+- [ ] Code implemented and reviewed
+- [ ] Tests written and passing
+- [ ] Documentation updated
+
+#### Story 01.6-001: Integrate Managed SSH Access with Zed
 
 **Value:** Open any prepared project remotely without manual SSH or Zed setup.
 
-- **Points:** 5
-- **Risk:** Medium
-- **Dependencies:** Stories 01.4-01.5
+**Priority**: Must Have
+**Story Points**: 5
+**Risk**: Medium
+**Dependencies**: 01.4-001, 01.5-001
 
-**Acceptance Criteria**
+##### Acceptance Criteria
 
 - Given no integration, when `open` first runs, then the CLI adds one
   idempotent include to `~/.ssh/config` and writes separate tool-owned SSH and
@@ -173,15 +210,22 @@ root access or copied private keys.
   connection and host-key state is refreshed without altering global
   known-hosts entries.
 
-### Story 01.7: Manage Persistent Localhost Port Tunnels
+##### Definition of Done
+
+- [ ] Code implemented and reviewed
+- [ ] Tests written and passing
+- [ ] Documentation updated
+
+#### Story 01.7-001: Manage Persistent Localhost Port Tunnels
 
 **Value:** Keep browser and API access stable independently of Zed's lifetime.
 
-- **Points:** 5
-- **Risk:** Medium
-- **Dependencies:** Stories 01.4 and 01.6
+**Priority**: Must Have
+**Story Points**: 5
+**Risk**: Medium
+**Dependencies**: 01.4-001, 01.6-001
 
-**Acceptance Criteria**
+##### Acceptance Criteria
 
 - Given configured ports, when `up` or `open` succeeds, then one managed
   background SSH tunnel binds them to macOS loopback only.
@@ -194,16 +238,23 @@ root access or copied private keys.
 - Given `stop` or `destroy`, when cleanup completes, then the tunnel is gone and
   repeated cleanup remains safe.
 
-### Story 01.8: Execute Only Explicit Project Commands
+##### Definition of Done
+
+- [ ] Code implemented and reviewed
+- [ ] Tests written and passing
+- [ ] Documentation updated
+
+#### Story 01.8-001: Execute Only Explicit Project Commands
 
 **Value:** Support convenient guest workflows without unexpectedly executing
   repository code.
 
-- **Points:** 5
-- **Risk:** Medium
-- **Dependencies:** Stories 01.1 and 01.4-01.5
+**Priority**: Must Have
+**Story Points**: 5
+**Risk**: Medium
+**Dependencies**: 01.1-001, 01.4-001, 01.5-001
 
-**Acceptance Criteria**
+##### Acceptance Criteria
 
 - Given a repository containing a Compose file, when `up` runs, then it neither
   discovers nor starts project services.
@@ -215,15 +266,22 @@ root access or copied private keys.
 - Given a command not declared by the project, when invoked by name, then it is
   rejected without executing repository content.
 
-### Story 01.9: Provide Explicit Base-Image Upgrades
+##### Definition of Done
+
+- [ ] Code implemented and reviewed
+- [ ] Tests written and passing
+- [ ] Documentation updated
+
+#### Story 01.9-001: Provide Explicit Base-Image Upgrades
 
 **Value:** Allow controlled platform updates without surprising data loss.
 
-- **Points:** 5
-- **Risk:** High
-- **Dependencies:** Stories 01.3-01.4
+**Priority**: Must Have
+**Story Points**: 5
+**Risk**: High
+**Dependencies**: 01.3-001, 01.4-001
 
-**Acceptance Criteria**
+##### Acceptance Criteria
 
 - Given a newer base image, when `status` runs, then the existing machine stays
   pinned and the available version is reported.
@@ -235,15 +293,22 @@ root access or copied private keys.
 - Given recreation is confirmed, when it completes, then the replacement uses
   the target image and normal mount, identity, SSH, and tunnel reconciliation.
 
-### Story 01.10: Automate the Baseline Nested-Compose Test
+##### Definition of Done
+
+- [ ] Code implemented and reviewed
+- [ ] Tests written and passing
+- [ ] Documentation updated
+
+#### Story 01.10-001: Automate the Baseline Nested-Compose Test
 
 **Value:** Continuously prove that Docker-in-Container-Machine remains viable.
 
-- **Points:** 5
-- **Risk:** High
-- **Dependencies:** Stories 01.3-01.5 and 01.8
+**Priority**: Must Have
+**Story Points**: 5
+**Risk**: High
+**Dependencies**: 01.3-001, 01.4-001, 01.5-001, 01.8-001
 
-**Acceptance Criteria**
+##### Acceptance Criteria
 
 - Given a fresh project machine, when the smoke test runs inside it, then
   Compose starts pinned BusyBox and Nginx images on a private network.
@@ -256,15 +321,22 @@ root access or copied private keys.
 - Given Apple Container 1.1.0, when the known startup race occurs, then the test
   captures diagnostics and exercises the supported readiness fallback.
 
-### Story 01.11: Run the Unmodified Forge DEV Stack
+##### Definition of Done
+
+- [ ] Code implemented and reviewed
+- [ ] Tests written and passing
+- [ ] Documentation updated
+
+#### Story 01.11-001: Run the Unmodified Forge DEV Stack
 
 **Value:** Prove compatibility with the most complex representative project.
 
-- **Points:** 8
-- **Risk:** High
-- **Dependencies:** Stories 01.5-01.8 and 01.10
+**Priority**: Must Have
+**Story Points**: 8
+**Risk**: High
+**Dependencies**: 01.5-001, 01.6-001, 01.7-001, 01.8-001, 01.10-001
 
-**Acceptance Criteria**
+##### Acceptance Criteria
 
 - Given `../forge` mounted in a project machine, when its explicit DEV command
   runs, then `docker compose --profile dev up -d` uses the existing Compose file
@@ -277,15 +349,22 @@ root access or copied private keys.
   identifies the affected image or build step and whether `linux/amd64`,
   Rosetta, or binfmt support is required.
 
-### Story 01.12: Validate Forge Persistence and Development Experience
+##### Definition of Done
+
+- [ ] Code implemented and reviewed
+- [ ] Tests written and passing
+- [ ] Documentation updated
+
+#### Story 01.12-001: Validate Forge Persistence and Development Experience
 
 **Value:** Confirm that the environment supports daily work, not only startup.
 
-- **Points:** 5
-- **Risk:** High
-- **Dependencies:** Stories 01.6-01.7 and 01.11
+**Priority**: Must Have
+**Story Points**: 5
+**Risk**: High
+**Dependencies**: 01.6-001, 01.7-001, 01.11-001
 
-**Acceptance Criteria**
+##### Acceptance Criteria
 
 - Given a running Forge stack with seeded data, when the project machine is
   stopped and restarted, then named database and application volumes retain
@@ -300,15 +379,22 @@ root access or copied private keys.
 - Given the measurements, when defaults are selected, then CPU, memory, and disk
   values are documented with their rationale.
 
-### Story 01.13: Package and Document the MVP
+##### Definition of Done
+
+- [ ] Code implemented and reviewed
+- [ ] Tests written and passing
+- [ ] Documentation updated
+
+#### Story 01.13-001: Package and Document the MVP
 
 **Value:** Make the validated workflow repeatable from a clean supported Mac.
 
-- **Points:** 3
-- **Risk:** Medium
-- **Dependencies:** Stories 01.1-01.12
+**Priority**: Must Have
+**Story Points**: 3
+**Risk**: Medium
+**Dependencies**: 01.1-001, 01.2-001, 01.3-001, 01.4-001, 01.5-001, 01.6-001, 01.7-001, 01.8-001, 01.9-001, 01.10-001, 01.11-001, 01.12-001
 
-**Acceptance Criteria**
+##### Acceptance Criteria
 
 - Given the release workflow, when it runs in CI or an isolated build
   environment, then it produces a versioned self-contained Apple-silicon
@@ -322,6 +408,12 @@ root access or copied private keys.
 - Given distribution beyond the initial user, when release readiness is
   assessed, then signing, notarization, and Gatekeeper requirements are
   documented rather than silently bypassed.
+
+##### Definition of Done
+
+- [ ] Code implemented and reviewed
+- [ ] Tests written and passing
+- [ ] Documentation updated
 
 ## Dependencies
 

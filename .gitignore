@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+.isolated-dev.local.toml
+.sdlc-state.db*
 
 # Local experiment output
 .artifacts/
