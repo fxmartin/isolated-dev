@@ -38,3 +38,27 @@ func TestStoreSavesAndLoadsProjectState(t *testing.T) {
 		t.Errorf("state mode = %o, want 600", gotMode)
 	}
 }
+
+func TestStoreDeleteIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	store := Store{Root: t.TempDir()}
+	project := Project{
+		SchemaVersion: 1,
+		ProjectPath:   "/Users/fx/dev/app",
+		MachineName:   "isolated-dev-app-abcd1234",
+	}
+	if err := store.Save(project); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	if err := store.Delete(project.MachineName); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if err := store.Delete(project.MachineName); err != nil {
+		t.Fatalf("second Delete() error = %v, want idempotent cleanup", err)
+	}
+	if _, err := store.Load(project.MachineName); err != ErrNotFound {
+		t.Fatalf("Load() error = %v, want ErrNotFound", err)
+	}
+}

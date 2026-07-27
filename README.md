@@ -65,6 +65,33 @@ Apple Container 1.1.0 can fail its first machine command while the guest
 restarts. Docker readiness is retried for 30 seconds before the embedded direct
 daemon fallback is used.
 
+## Project Machine Lifecycle
+
+Create or restart the stable machine derived from a Git repository:
+
+```sh
+isolated-dev up /path/to/repository
+```
+
+The current Apple Container 1.x integration uses a read-write full-home mount.
+The active `home` mount scope is recorded in project state and reported by
+`status`. Existing machines remain pinned to their original image and resource
+settings; change those settings only by explicitly destroying and recreating
+the machine.
+
+Stopping preserves the machine and its persistent guest data:
+
+```sh
+isolated-dev stop /path/to/repository
+```
+
+Destruction removes only that repository's derived machine and local lifecycle
+state. It requires an explicit confirmation flag:
+
+```sh
+isolated-dev destroy --yes /path/to/repository
+```
+
 ## Development
 
 ```sh

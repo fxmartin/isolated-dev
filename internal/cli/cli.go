@@ -10,6 +10,9 @@ type Dependencies struct {
 	Stderr   io.Writer
 	Version  string
 	Status   func(string) error
+	Up       func(string) error
+	Stop     func(string) error
+	Destroy  func(string) error
 	OnMutate func()
 }
 
@@ -19,17 +22,61 @@ func Run(args []string, deps Dependencies) int {
 		return 0
 	}
 	if len(args) == 2 && args[0] == "status" {
-		if deps.Status == nil {
-			fmt.Fprintln(deps.Stderr, "status: command is unavailable")
-			return 1
+		return runCommand("status", args[1], deps.Status, deps, false)
+	}
+	if len(args) == 2 && args[0] == "up" {
+		return runCommand("up", args[1], deps.Up, deps, true)
+	}
+	if len(args) == 2 && args[0] == "stop" {
+		return runCommand("stop", args[1], deps.Stop, deps, true)
+	}
+	if len(args) == 3 && args[0] == "destroy" {
+		projectPath, confirmed := confirmedDestroy(args[1:])
+		if !confirmed {
+			fmt.Fprintln(deps.Stderr, "destroy: pass --yes to confirm deletion of the project machine and persistent data")
+			return 2
 		}
-		if err := deps.Status(args[1]); err != nil {
-			fmt.Fprintf(deps.Stderr, "status: %v\n", err)
-			return 1
-		}
-		return 0
+		return runCommand("destroy", projectPath, deps.Destroy, deps, true)
+	}
+	if len(args) == 2 && args[0] == "destroy" {
+		fmt.Fprintln(deps.Stderr, "destroy: pass --yes to confirm deletion of the project machine and persistent data")
+		return 2
 	}
 
-	fmt.Fprintln(deps.Stderr, "usage: isolated-dev <status PROJECT|--version>")
+	fmt.Fprintln(
+		deps.Stderr,
+		"usage: isolated-dev <up PROJECT|status PROJECT|stop PROJECT|destroy --yes PROJECT|--version>",
+	)
 	return 2
+}
+
+func runCommand(
+	name string,
+	projectPath string,
+	command func(string) error,
+	deps Dependencies,
+	mutating bool,
+) int {
+	if command == nil {
+		fmt.Fprintf(deps.Stderr, "%s: command is unavailable\n", name)
+		return 1
+	}
+	if mutating && deps.OnMutate != nil {
+		deps.OnMutate()
+	}
+	if err := command(projectPath); err != nil {
+		fmt.Fprintf(deps.Stderr, "%s: %v\n", name, err)
+		return 1
+	}
+	return 0
+}
+
+func confirmedDestroy(args []string) (string, bool) {
+	if args[0] == "--yes" {
+		return args[1], true
+	}
+	if args[1] == "--yes" {
+		return args[0], true
+	}
+	return "", false
 }

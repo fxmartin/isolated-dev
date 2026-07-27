@@ -5,8 +5,10 @@ import (
 	"os"
 
 	"github.com/fxmartin/isolated-dev/internal/app"
+	"github.com/fxmartin/isolated-dev/internal/baseimage"
 	"github.com/fxmartin/isolated-dev/internal/cli"
 	"github.com/fxmartin/isolated-dev/internal/host"
+	"github.com/fxmartin/isolated-dev/internal/machine"
 	"github.com/fxmartin/isolated-dev/internal/state"
 )
 
@@ -18,10 +20,18 @@ func main() {
 		os.Stderr.WriteString("isolated-dev: " + err.Error() + "\n")
 		os.Exit(1)
 	}
+	runner := baseimage.ExecRunner{}
+	imageManager := &baseimage.Manager{Runner: runner}
+	machineManager := &machine.Manager{
+		Runner:       runner,
+		StateStore:   store,
+		DockerWaiter: imageManager,
+	}
 	application := app.App{
-		Version:     version,
-		HostChecker: host.DefaultChecker(),
-		StateStore:  store,
+		Version:        version,
+		HostChecker:    host.DefaultChecker(),
+		StateStore:     store,
+		MachineManager: machineManager,
 	}
 	os.Exit(cli.Run(os.Args[1:], cli.Dependencies{
 		Stdout:  os.Stdout,
@@ -29,6 +39,24 @@ func main() {
 		Version: version,
 		Status: func(path string) error {
 			return application.Status(context.Background(), path, os.Stdout)
+		},
+		Up: func(path string) error {
+			result, err := application.Up(context.Background(), path)
+			if err != nil {
+				return err
+			}
+			if result.Created {
+				os.Stdout.WriteString("created " + path + "\n")
+			} else {
+				os.Stdout.WriteString("ready " + path + "\n")
+			}
+			return nil
+		},
+		Stop: func(path string) error {
+			return application.Stop(context.Background(), path)
+		},
+		Destroy: func(path string) error {
+			return application.Destroy(context.Background(), path)
 		},
 	}))
 }

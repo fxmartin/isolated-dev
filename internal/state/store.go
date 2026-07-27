@@ -18,6 +18,8 @@ type Project struct {
 	BaseImage        string `json:"base_image"`
 	BaseImageVersion string `json:"base_image_version"`
 	MountScope       string `json:"mount_scope"`
+	CPUs             int    `json:"cpus"`
+	MemoryGB         int    `json:"memory_gb"`
 }
 
 type Store struct {
@@ -100,6 +102,18 @@ func (store Store) Load(machineName string) (Project, error) {
 		return Project{}, fmt.Errorf("unsupported state schema version %d", project.SchemaVersion)
 	}
 	return project, nil
+}
+
+func (store Store) Delete(machineName string) error {
+	if err := validateMachineName(machineName); err != nil {
+		return err
+	}
+	if err := os.Remove(store.path(machineName)); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("delete project state: %w", err)
+	}
+	return nil
 }
 
 func (store Store) path(machineName string) string {
