@@ -1,0 +1,8 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Local experiment output
+.artifacts/
+.tmp/
