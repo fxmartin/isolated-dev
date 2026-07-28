@@ -1,9 +1,11 @@
 package sshconfig
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -329,5 +331,203 @@ func TestManagerRequiresAnSSHDirectory(t *testing.T) {
 	err := manager.Apply(Entry{Alias: "isolated-dev-app-abcd1234", HostName: "10.0.0.1", User: "fx"})
 	if err == nil || !strings.Contains(err.Error(), "SSH directory") {
 		t.Fatalf("Apply() error = %v, want a missing SSH directory rejection", err)
+	}
+}
+
+// A developer whose dotfiles own ~/.ssh/config reaches it through a symlink.
+// Adding the Include must write through that link: replacing it with a regular
+// file detaches the config from its source, and every later dotfiles change
+// then stops reaching SSH without anything being reported.
+func TestApplyWritesThroughASymlinkedDeveloperConfig(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sshDir := filepath.Join(root, ".ssh")
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	dotfiles := filepath.Join(root, "dotfiles")
+	if err := os.MkdirAll(dotfiles, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	source := filepath.Join(dotfiles, "ssh_config")
+	own := "Host build-box\n    HostName build.example.com\n"
+	if err := os.WriteFile(source, []byte(own), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	manager := Manager{SSHDir: sshDir}
+	if err := os.Symlink(source, manager.userConfigPath()); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	if err := manager.Apply(Entry{
+		Alias:    "isolated-dev-app-abcd1234",
+		HostName: "192.168.64.5",
+		User:     "fx",
+	}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	info, err := os.Lstat(manager.userConfigPath())
+	if err != nil {
+		t.Fatalf("Lstat() error = %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("the developer's symlinked SSH config was replaced by a regular file")
+	}
+	// The Include has to land in the file the link points at, or the dotfiles
+	// source and the live config have silently diverged.
+	linked := readFile(t, source)
+	if !strings.Contains(linked, "Include") {
+		t.Errorf("dotfiles source did not receive the Include:\n%s", linked)
+	}
+	if !strings.Contains(linked, own) {
+		t.Errorf("dotfiles source lost the developer's own entries:\n%s", linked)
+	}
+}
+
+// A relative symlink is the common dotfiles shape, and a link chain is what a
+// stow-style layout produces; both have to resolve to the same real file.
+func TestApplyFollowsARelativeSymlinkChain(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sshDir := filepath.Join(root, ".ssh")
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	source := filepath.Join(sshDir, "config.real")
+	if err := os.WriteFile(source, []byte("Host mine\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	manager := Manager{SSHDir: sshDir}
+	if err := os.Symlink("config.hop", manager.userConfigPath()); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+	if err := os.Symlink("config.real", filepath.Join(sshDir, "config.hop")); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	if err := manager.Apply(Entry{
+		Alias:    "isolated-dev-app-abcd1234",
+		HostName: "192.168.64.5",
+		User:     "fx",
+	}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	if !strings.Contains(readFile(t, source), "Include") {
+		t.Error("the Include did not reach the end of the symlink chain")
+	}
+	for _, link := range []string{manager.userConfigPath(), filepath.Join(sshDir, "config.hop")} {
+		info, err := os.Lstat(link)
+		if err != nil {
+			t.Fatalf("Lstat() error = %v", err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Errorf("%q was replaced by a regular file", link)
+		}
+	}
+}
+
+// A symlink loop can never resolve to a file, so it has to be reported rather
+// than followed until the process runs out of descriptors.
+func TestWriteAtomicRejectsASymlinkLoop(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	first := filepath.Join(root, "first")
+	second := filepath.Join(root, "second")
+	if err := os.Symlink(second, first); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+	if err := os.Symlink(first, second); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	err := writeAtomic(first, "Host example\n")
+	if err == nil || !strings.Contains(err.Error(), "too many levels of symbolic links") {
+		t.Fatalf("writeAtomic() error = %v, want a symlink-loop failure", err)
+	}
+}
+
+// Two `up` runs for different projects share one managed file. Each reads it,
+// upserts only its own host, and writes the whole file back, so without a lock
+// around that read-modify-write the second replace drops the first project's
+// host while both runs report success.
+func TestConcurrentApplyKeepsEveryManagedHost(t *testing.T) {
+	t.Parallel()
+
+	manager := managerAt(t)
+	const projects = 8
+
+	var group sync.WaitGroup
+	errs := make([]error, projects)
+	for index := range projects {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			errs[index] = manager.Apply(Entry{
+				Alias:    fmt.Sprintf("isolated-dev-app%d-abcd1234", index),
+				HostName: fmt.Sprintf("192.168.64.%d", index+2),
+				User:     "fx",
+			})
+		}()
+	}
+	group.Wait()
+
+	for index, err := range errs {
+		if err != nil {
+			t.Fatalf("Apply(project %d) error = %v", index, err)
+		}
+	}
+	managed := readFile(t, manager.ManagedConfigPath())
+	for index := range projects {
+		alias := fmt.Sprintf("isolated-dev-app%d-abcd1234", index)
+		if !strings.Contains(managed, "Host "+alias+"\n") {
+			t.Errorf("concurrent Apply lost the host block for %q:\n%s", alias, managed)
+		}
+	}
+	// The developer's config must still gain exactly one Include, however many
+	// runs raced to add it.
+	if got := strings.Count(readFile(t, manager.userConfigPath()), "Include "); got != 1 {
+		t.Errorf("Include count = %d, want exactly 1", got)
+	}
+}
+
+// Destroy prunes a host block from the same shared file, so it has to take the
+// same lock as the `up` runs it can overlap with.
+func TestConcurrentApplyAndRemoveKeepUnrelatedHosts(t *testing.T) {
+	t.Parallel()
+
+	manager := managerAt(t)
+	doomed := Entry{Alias: "isolated-dev-old-99999999", HostName: "192.168.64.9", User: "fx"}
+	if err := manager.Apply(doomed); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	var group sync.WaitGroup
+	var applyErr, removeErr error
+	group.Add(2)
+	go func() {
+		defer group.Done()
+		applyErr = manager.Apply(Entry{
+			Alias:    "isolated-dev-new-abcd1234",
+			HostName: "192.168.64.5",
+			User:     "fx",
+		})
+	}()
+	go func() {
+		defer group.Done()
+		removeErr = manager.Remove(doomed.Alias)
+	}()
+	group.Wait()
+
+	if applyErr != nil || removeErr != nil {
+		t.Fatalf("Apply() error = %v, Remove() error = %v", applyErr, removeErr)
+	}
+	managed := readFile(t, manager.ManagedConfigPath())
+	if !strings.Contains(managed, "Host isolated-dev-new-abcd1234\n") {
+		t.Errorf("the new project's host block was lost:\n%s", managed)
 	}
 }

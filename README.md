@@ -300,6 +300,17 @@ ISOLATED_DEV_RUN_HOST_TESTS=1 go test ./internal/sshconfig \
   -run TestHostConnectsOverManagedSSH -count=1 -v
 ```
 
+The Zed check is not destructive and needs no machine. It resolves the real
+`zed` CLI the way `open` does, confirms the installed build is invocable, and
+verifies the `ssh://` target decodes back to exactly the managed alias and guest
+project path. It stops before launching a window, which no unattended run can
+assert on:
+
+```sh
+ISOLATED_DEV_RUN_HOST_TESTS=1 go test ./internal/zed \
+  -run TestHostZedCLIOpensTheManagedTarget -count=1 -v
+```
+
 `status` is read-only. It validates the canonical Git repository path and host
 prerequisites, then reports effective resources, the guest identity and mounted
 project path, and the project machine, base-image, mount, SSH, and tunnel state

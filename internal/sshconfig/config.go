@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 )
 
 // aliasPattern matches the derived project-machine names that become SSH host
@@ -64,6 +65,36 @@ func (manager Manager) userConfigPath() string {
 	return filepath.Join(manager.SSHDir, "config")
 }
 
+func (manager Manager) lockPath() string {
+	return filepath.Join(manager.managedDir(), ".lock")
+}
+
+// withLock serializes one whole read-modify-write of the managed files against
+// every other isolated-dev process. Without it two `up` runs for different
+// projects read the same file, each write back only their own host block, and
+// the second replace silently drops the first project's host while both runs
+// report success.
+//
+// The lock is advisory and released when the process exits, so a crashed run
+// never wedges the next one. mutate must not call an exported method that locks
+// again: the second descriptor would wait on the first.
+func (manager Manager) withLock(mutate func() error) error {
+	if err := os.MkdirAll(manager.managedDir(), 0o700); err != nil {
+		return fmt.Errorf("create managed SSH directory: %w", err)
+	}
+	file, err := os.OpenFile(manager.lockPath(), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("open managed SSH lock: %w", err)
+	}
+	// Closing the descriptor releases the lock, so one defer covers both.
+	defer file.Close()
+
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("lock managed SSH configuration: %w", err)
+	}
+	return mutate()
+}
+
 // Apply reconciles the managed host block for one project machine and makes
 // sure the developer's configuration includes the managed file. It is
 // idempotent: rerunning it with a new address updates that machine's block and
@@ -75,24 +106,22 @@ func (manager Manager) Apply(entry Entry) error {
 	if err := validateEntry(entry); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(manager.managedDir(), 0o700); err != nil {
-		return fmt.Errorf("create managed SSH directory: %w", err)
-	}
-	// Only the tool-owned directory is tightened: the developer's ~/.ssh keeps
-	// whatever mode they gave it.
-	if err := os.Chmod(manager.managedDir(), 0o700); err != nil {
-		return fmt.Errorf("secure managed SSH directory: %w", err)
-	}
-
-	blocks, err := manager.loadBlocks()
-	if err != nil {
-		return err
-	}
-	blocks = upsert(blocks, entry.Alias, manager.render(entry))
-	if err := writeAtomic(manager.ManagedConfigPath(), renderFile(blocks)); err != nil {
-		return fmt.Errorf("write managed SSH configuration: %w", err)
-	}
-	return manager.ensureInclude()
+	return manager.withLock(func() error {
+		// Only the tool-owned directory is tightened: the developer's ~/.ssh keeps
+		// whatever mode they gave it.
+		if err := os.Chmod(manager.managedDir(), 0o700); err != nil {
+			return fmt.Errorf("secure managed SSH directory: %w", err)
+		}
+		blocks, err := manager.loadBlocks()
+		if err != nil {
+			return err
+		}
+		blocks = upsert(blocks, entry.Alias, manager.render(entry))
+		if err := writeAtomic(manager.ManagedConfigPath(), renderFile(blocks)); err != nil {
+			return fmt.Errorf("write managed SSH configuration: %w", err)
+		}
+		return manager.ensureInclude()
+	})
 }
 
 // Remove drops one project machine from the managed configuration and forgets
@@ -104,24 +133,26 @@ func (manager Manager) Remove(alias string) error {
 	if err := validateAlias(alias); err != nil {
 		return err
 	}
-	blocks, err := manager.loadBlocks()
-	if err != nil {
-		return err
-	}
-	remaining := make([]block, 0, len(blocks))
-	for _, existing := range blocks {
-		if existing.alias != alias {
-			remaining = append(remaining, existing)
+	return manager.withLock(func() error {
+		blocks, err := manager.loadBlocks()
+		if err != nil {
+			return err
 		}
-	}
-	// A machine that was never configured leaves no file behind; cleanup must
-	// not create one.
-	if len(remaining) != len(blocks) {
-		if err := writeAtomic(manager.ManagedConfigPath(), renderFile(remaining)); err != nil {
-			return fmt.Errorf("write managed SSH configuration: %w", err)
+		remaining := make([]block, 0, len(blocks))
+		for _, existing := range blocks {
+			if existing.alias != alias {
+				remaining = append(remaining, existing)
+			}
 		}
-	}
-	return manager.ForgetHostKey(alias)
+		// A machine that was never configured leaves no file behind; cleanup must
+		// not create one.
+		if len(remaining) != len(blocks) {
+			if err := writeAtomic(manager.ManagedConfigPath(), renderFile(remaining)); err != nil {
+				return fmt.Errorf("write managed SSH configuration: %w", err)
+			}
+		}
+		return manager.forgetHostKey(alias)
+	})
 }
 
 // ForgetHostKey drops the host keys recorded for one project machine. A
@@ -134,6 +165,12 @@ func (manager Manager) ForgetHostKey(alias string) error {
 	if err := validateAlias(alias); err != nil {
 		return err
 	}
+	return manager.withLock(func() error { return manager.forgetHostKey(alias) })
+}
+
+// forgetHostKey does the work of ForgetHostKey with the managed lock already
+// held, so Remove can prune the host block and its keys under one lock.
+func (manager Manager) forgetHostKey(alias string) error {
 	data, err := os.ReadFile(manager.KnownHostsPath())
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -324,7 +361,36 @@ func validateOption(name string, value string) error {
 	return nil
 }
 
+// resolveLink follows a symlinked destination to the file it points at. A
+// rename replaces the link itself, so writing straight to path would turn a
+// dotfiles-managed ~/.ssh/config into a regular file and silently orphan the
+// source it was linked to.
+func resolveLink(path string) (string, error) {
+	for depth := 0; depth < 8; depth++ {
+		info, err := os.Lstat(path)
+		// A destination that cannot be inspected — missing, or below a
+		// non-directory — is left alone so the write below reports the real
+		// failure in the caller's own words.
+		if err != nil || info.Mode()&fs.ModeSymlink == 0 {
+			return path, nil
+		}
+		target, err := os.Readlink(path)
+		if err != nil {
+			return path, nil
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
+		}
+		path = target
+	}
+	return "", fmt.Errorf("resolve %q: too many levels of symbolic links", path)
+}
+
 func writeAtomic(path string, content string) error {
+	path, err := resolveLink(path)
+	if err != nil {
+		return err
+	}
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return fmt.Errorf("create %q: %w", directory, err)

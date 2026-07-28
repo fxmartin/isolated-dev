@@ -137,11 +137,28 @@ func TestForgetHostKeyReportsHostSideFailures(t *testing.T) {
 			},
 			want: "read managed known hosts",
 		},
-		"known hosts cannot be rewritten": {
+		// A managed directory that cannot take the lock file stops the whole
+		// read-modify-write before it rewrites anything.
+		"managed lock cannot be opened": {
 			arrange: func(t *testing.T, manager Manager) {
 				t.Helper()
 				if err := os.MkdirAll(manager.managedDir(), 0o700); err != nil {
 					t.Fatalf("MkdirAll() error = %v", err)
+				}
+				if err := os.Chmod(manager.managedDir(), 0o500); err != nil {
+					t.Fatalf("Chmod() error = %v", err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(manager.managedDir(), 0o700) })
+			},
+			want: "open managed SSH lock",
+		},
+		"known hosts cannot be rewritten": {
+			arrange: func(t *testing.T, manager Manager) {
+				t.Helper()
+				// Apply first, the way the tool always reaches this directory, so
+				// the managed lock exists before the directory is sealed.
+				if err := manager.Apply(coverageEntry); err != nil {
+					t.Fatalf("Apply() error = %v", err)
 				}
 				if err := os.WriteFile(
 					manager.KnownHostsPath(),
