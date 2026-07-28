@@ -518,9 +518,11 @@ through `stop` and `up` and checks that:
   same volumes — same driver, mount point, and Docker creation timestamp — still
   holding everything they held before, so a restart never silently reinitialises
   the database;
-- macOS ports 3001 and 8001 answer while no CLI command is running, stop
-  answering once the machine is stopped, and answer again through the tunnel the
-  restart reconciles, whatever address the machine came back on;
+- macOS ports 3001 and 8001 answer while no CLI command is running, refuse
+  connections once the machine is stopped, and answer again through the tunnel
+  the restart reconciles, whatever address the machine came back on. Only a
+  refused connection counts as released: a port that answers anything at all,
+  including an error status, is still held by something;
 - an edit macOS writes into the mounted repository is readable in Linux as the
   provisioned guest user, a file that user creates is readable from macOS, and
   both carry the developer's own ownership on both sides;
@@ -531,11 +533,11 @@ through `stop` and `up` and checks that:
 Like the acceptance run it owns nothing and removes nothing: the machine, the
 containers, and the named volumes holding real data are left as they were found.
 The only things it writes into the repository are two marker files, which it
-refuses to create if the names are already taken and removes on every path,
-including a failing one. It restarts the Forge DEV stack, so run it only where
-that is what you want to happen — and a run that fails between `stop` and `up`
-leaves the machine stopped, which it says, naming the `isolated-dev up` that
-brings the stack back:
+refuses to create if the names are already taken and removes from both sides of
+the mount on every path, including a failing one. It restarts the Forge DEV
+stack, so run it only where that is what you want to happen — and a run that
+fails between `stop` and `up` leaves the machine stopped, which it says, naming
+the `isolated-dev up` that brings the stack back:
 
 ```sh
 ISOLATED_DEV_RUN_HOST_TESTS=1 go test ./internal/forge \

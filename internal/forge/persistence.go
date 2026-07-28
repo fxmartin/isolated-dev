@@ -36,6 +36,10 @@ const DefaultMarkerName = ".isolated-dev-persistence-check"
 // what proves a file made in the guest is usable from macOS.
 const guestCopySuffix = ".guest"
 
+// markerCleanupTimeout bounds the guest-side removal of that copy. It runs after
+// the check has already ended, so it may not wait on the machine indefinitely.
+const markerCleanupTimeout = 30 * time.Second
+
 // volumeFormat reads the identity of a named volume. A volume that was
 // recreated rather than preserved reports a new creation timestamp, so the
 // three fields together are what distinguishes "the same volume" from "a volume
@@ -179,7 +183,8 @@ type Lifecycle interface {
 //
 // It inherits the acceptance run's rule about the workload: it owns nothing and
 // removes nothing. The only things it ever writes are two marker files inside
-// the project, and it removes both on every path, including a failing one.
+// the project, and it removes both from both sides of the mount on every path,
+// including a failing one.
 type Persistence struct {
 	Acceptance
 	Lifecycle Lifecycle
@@ -501,9 +506,11 @@ func (persistence Persistence) checkMountedEdits(
 ) (EditRoundTrip, error) {
 	hostPath := filepath.Join(request.ProjectPath, request.MarkerName)
 	hostCopy := hostPath + guestCopySuffix
-	guestPath := path.Join(request.GuestProjectPath, request.MarkerName)
-	guestCopy := guestPath + guestCopySuffix
-	roundTrip := EditRoundTrip{HostPath: hostPath, GuestPath: guestPath}
+	// The marker's Linux path is named guestMarker rather than guestPath, which
+	// is the package-level guest PATH every guest invocation is built with.
+	guestMarker := path.Join(request.GuestProjectPath, request.MarkerName)
+	guestCopy := guestMarker + guestCopySuffix
+	roundTrip := EditRoundTrip{HostPath: hostPath, GuestPath: guestMarker}
 
 	content := markerContent(request.MachineName)
 	// The guest copy is created by `cp`, which overwrites rather than refuses, so
@@ -520,11 +527,11 @@ func (persistence Persistence) checkMountedEdits(
 	defer os.Remove(hostPath)
 	defer os.Remove(hostCopy)
 
-	output, err := persistence.guestAsUser(ctx, request, "cat", guestPath)
+	output, err := persistence.guestAsUser(ctx, request, "cat", guestMarker)
 	if err != nil {
 		return roundTrip, fmt.Errorf(
 			"read the macOS edit at %s from Linux as %s: %w\n%s",
-			guestPath,
+			guestMarker,
 			request.GuestUser,
 			err,
 			output,
@@ -534,13 +541,17 @@ func (persistence Persistence) checkMountedEdits(
 		return roundTrip, fmt.Errorf(
 			"Linux read %q from %s, but macOS wrote %q; the mounted repository is not carrying edits into the guest",
 			strings.TrimSpace(string(output)),
-			guestPath,
+			guestMarker,
 			strings.TrimSpace(content),
 		)
 	}
 	roundTrip.HostEditRead = true
 
-	if output, err := persistence.guestAsUser(ctx, request, "cp", guestPath, guestCopy); err != nil {
+	// The guest copy is made inside the machine, so the macOS removal above can
+	// only reach it while the mount really is shared — which is exactly what the
+	// next lines may be about to disprove. It is removed from the guest side too.
+	defer persistence.removeGuestCopy(ctx, request, guestCopy)
+	if output, err := persistence.guestAsUser(ctx, request, "cp", guestMarker, guestCopy); err != nil {
 		return roundTrip, fmt.Errorf(
 			"create %s in the guest as %s: %w\n%s",
 			guestCopy,
@@ -617,6 +628,21 @@ func reserveMarker(hostPath string) error {
 		)
 	}
 	return nil
+}
+
+// removeGuestCopy removes the Linux-created marker from inside the machine. It
+// runs on a context detached from the caller's, because a run that was given up
+// on is one of the paths the repository still has to come back clean from, and
+// its failure is swallowed like the macOS removals: a marker that could not be
+// removed must not become the run's own result.
+func (persistence Persistence) removeGuestCopy(
+	ctx context.Context,
+	request PersistenceRequest,
+	guestCopy string,
+) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), markerCleanupTimeout)
+	defer cancel()
+	_, _ = persistence.guestAsUser(cleanupCtx, request, "rm", "-f", guestCopy)
 }
 
 // readGuestOwnership reads the ownership Linux sees on the file Linux created.
@@ -702,24 +728,69 @@ func (persistence Persistence) confirmPortsClosed(
 	return closed, nil
 }
 
-// awaitClosed waits for one endpoint to stop answering. A socket the tunnel
-// process was still releasing when `stop` returned is given a moment rather
-// than reported immediately.
+// awaitClosed waits for one endpoint to stop accepting connections. A socket the
+// tunnel process was still releasing when `stop` returned is given a moment
+// rather than reported immediately.
+//
+// Only a refused connection ends the wait successfully. A probe also fails when
+// the port answers with an error status, when the response cannot be read, and
+// when the run itself is given up on — none of which says the socket was
+// released, so treating any failure as proof would record a port that is still
+// bound, or a run that never reached it, as closed.
 func (persistence Persistence) awaitClosed(ctx context.Context, endpoint Endpoint) error {
 	tries := persistence.closureTries()
+	// pending is why the last probe did not prove the port was released. It stays
+	// nil while the endpoint simply answers.
+	var pending error
 	for attempt := 0; attempt < tries; attempt++ {
-		if _, err := persistence.Prober.Get(ctx, endpoint.URL()); err != nil {
+		_, err := persistence.Prober.Get(ctx, endpoint.URL())
+		switch {
+		case err == nil:
+			pending = nil
+		case portRefused(err):
 			return nil
+		case ctx.Err() != nil:
+			return fmt.Errorf(
+				"gave up before macOS port %d for the Forge %s at %s was seen to close: %w",
+				endpoint.HostPort,
+				endpoint.Label,
+				endpoint.URL(),
+				ctx.Err(),
+			)
+		default:
+			pending = err
 		}
 		if err := persistence.pause(ctx, attempt, tries); err != nil {
 			return err
 		}
 	}
+	return unreleasedPort(endpoint, pending)
+}
+
+// portRefused reports that a probe failed because nothing accepted the
+// connection, which is what a released macOS socket does.
+func portRefused(err error) bool {
+	return errors.Is(err, syscall.ECONNREFUSED)
+}
+
+// unreleasedPort says what the wait actually saw, because a port that answers
+// and a port that answers with an error status are different findings about the
+// same socket, and only the first is what "still answers" means.
+func unreleasedPort(endpoint Endpoint, pending error) error {
+	if pending == nil {
+		return fmt.Errorf(
+			"macOS port %d still answers for the Forge %s at %s after `stop`, so the stopped machine's ports are not released",
+			endpoint.HostPort,
+			endpoint.Label,
+			endpoint.URL(),
+		)
+	}
 	return fmt.Errorf(
-		"macOS port %d still answers for the Forge %s at %s after `stop`, so the stopped machine's ports are not released",
+		"macOS port %d for the Forge %s at %s did not refuse connections after `stop`, so the stopped machine's ports are not proven released: %w",
 		endpoint.HostPort,
 		endpoint.Label,
 		endpoint.URL(),
+		pending,
 	)
 }
 

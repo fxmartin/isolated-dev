@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -35,6 +36,9 @@ type lifecycleStub struct {
 	// onUp runs while the machine comes back, so a test can change what the
 	// restarted machine reports.
 	onUp func()
+	// onStop runs once the machine is down, which is the moment the macOS ports
+	// start being watched for their closure.
+	onStop func()
 	// upElapsed advances the fake clock, so the cached machine readiness target is
 	// measured rather than assumed.
 	upElapsed time.Duration
@@ -47,6 +51,9 @@ func (stub *lifecycleStub) Stop(_ context.Context, projectPath string) error {
 		return stub.stopErr
 	}
 	stub.state.running = false
+	if stub.onStop != nil {
+		stub.onStop()
+	}
 	return nil
 }
 
@@ -97,12 +104,24 @@ type stateProber struct {
 	// answerWhenStopped keeps the endpoint answering after `stop`, which is the
 	// failure a persistence run has to catch.
 	answerWhenStopped bool
+	// stoppedErr replaces the refused connection a released socket answers with,
+	// which is how a probe that fails for a reason saying nothing about the
+	// socket — an error status, a read that never completed — is simulated.
+	stoppedErr error
 }
 
-func (prober *stateProber) Get(_ context.Context, url string) (string, error) {
+func (prober *stateProber) Get(ctx context.Context, url string) (string, error) {
 	prober.urls = append(prober.urls, url)
+	// The real prober carries the caller's context into the request, so a run
+	// that has been given up on fails here rather than answering.
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("request %s: %w", url, err)
+	}
 	if !prober.state.running && !prober.answerWhenStopped {
-		return "", errors.New("connection refused")
+		if prober.stoppedErr != nil {
+			return "", prober.stoppedErr
+		}
+		return "", fmt.Errorf("request %s: %w", url, syscall.ECONNREFUSED)
 	}
 	if body, ok := prober.bodies[url]; ok {
 		return body, nil
@@ -493,6 +512,66 @@ func TestPersistenceValidateReportsPortsThatStayOpenAfterStop(t *testing.T) {
 	// error is the only thing that can say how to bring it back.
 	if !strings.Contains(err.Error(), "isolated-dev up "+test.projectDir) {
 		t.Errorf("Validate() error = %v, want it to name the `up` that restores the stack", err)
+	}
+}
+
+// A port that answers with an error status is still bound: something is holding
+// the socket a stopped machine was supposed to release. The probe fails either
+// way, so only a refused connection may count as proof.
+func TestPersistenceValidateRejectsAPortThatAnswersWithAnErrorStatusAfterStop(t *testing.T) {
+	test := newPersistenceHarness(t)
+	test.prober.stoppedErr = errors.New("http://127.0.0.1:3001/ returned HTTP 503")
+
+	report, err := test.validate(t)
+	if err == nil || !strings.Contains(err.Error(), "3001") {
+		t.Fatalf("Validate() error = %v, want the still-bound macOS port named", err)
+	}
+	if !strings.Contains(err.Error(), "503") {
+		t.Errorf("Validate() error = %v, want it to quote what the port answered", err)
+	}
+	if len(report.Ports.ClosedAfterStop) != 0 {
+		t.Errorf("ClosedAfterStop = %v, want no endpoint recorded as closed",
+			report.Ports.ClosedAfterStop)
+	}
+}
+
+// A run that is given up on while it waits cannot claim the ports closed: every
+// probe after the cancellation fails for a reason that says nothing about the
+// socket.
+func TestPersistenceValidateDoesNotRecordClosureWhenTheRunIsCancelled(t *testing.T) {
+	test := newPersistenceHarness(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	test.lifecycle.onStop = cancel
+
+	report, err := test.persistence.Validate(ctx, test.request)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Validate() error = %v, want the cancellation", err)
+	}
+	if len(report.Ports.ClosedAfterStop) != 0 {
+		t.Errorf("ClosedAfterStop = %v, want no endpoint recorded as closed",
+			report.Ports.ClosedAfterStop)
+	}
+}
+
+// The guest copy is made inside the machine, so macOS can only remove it while
+// the mount really is shared — which is the very thing the round trip may be
+// about to disprove. It is removed from the guest side too.
+func TestPersistenceValidateRemovesTheGuestCopyFromInsideTheMachine(t *testing.T) {
+	test := newPersistenceHarness(t)
+	// `cp` succeeds in the guest and macOS never sees the file, which is the
+	// unshared mount the round trip exists to catch.
+	test.interceptGuest(" cp ", func(recordedCall) ([]byte, error) { return nil, nil })
+
+	if _, err := test.validate(t); err == nil {
+		t.Fatal("Validate() error = nil, want the invisible guest file reported")
+	}
+	guestCopy := filepath.Join(test.request.GuestProjectPath, DefaultMarkerName+guestCopySuffix)
+	removal := " rm -f " + guestCopy
+	if !slices.ContainsFunc(test.runner.lines(), func(line string) bool {
+		return strings.Contains(line, removal)
+	}) {
+		t.Errorf("guest commands = %v, want one removing %s inside the machine",
+			test.runner.lines(), guestCopy)
 	}
 }
 
