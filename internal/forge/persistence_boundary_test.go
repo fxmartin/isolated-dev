@@ -464,6 +464,53 @@ func TestWriteMarkerCreatesTheMarkerOnlyWhenNothingIsThere(t *testing.T) {
 	}
 }
 
+// reserveMarker is the guard the guest copy has instead of O_EXCL: the guest
+// creates it with `cp`, which overwrites, so the name has to be checked before
+// the run writes anything.
+func TestReserveMarkerRefusesANameThatIsTaken(t *testing.T) {
+	guestCopy := filepath.Join(t.TempDir(), DefaultMarkerName+guestCopySuffix)
+
+	if err := reserveMarker(guestCopy); err != nil {
+		t.Fatalf("reserveMarker() error = %v, want a free name accepted", err)
+	}
+	if _, err := os.Stat(guestCopy); !os.IsNotExist(err) {
+		t.Errorf("Stat() error = %v, want the check to have written nothing", err)
+	}
+
+	if err := os.WriteFile(guestCopy, []byte("real content\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	err := reserveMarker(guestCopy)
+	if err == nil {
+		t.Fatal("reserveMarker() = nil on an existing file, want it refused")
+	}
+	if !strings.Contains(err.Error(), DefaultMarkerName+guestCopySuffix) {
+		t.Errorf("reserveMarker() error = %v, want it to name the file in the way", err)
+	}
+	if !strings.Contains(err.Error(), "another marker name") {
+		t.Errorf("reserveMarker() error = %v, want it to suggest a way out", err)
+	}
+	if data, readErr := os.ReadFile(guestCopy); readErr != nil || string(data) != "real content\n" {
+		t.Errorf("file = %q (%v), want the existing file untouched", data, readErr)
+	}
+}
+
+// A name that cannot even be looked at is refused rather than assumed free.
+func TestReserveMarkerReportsANameItCannotCheck(t *testing.T) {
+	notADirectory := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(notADirectory, nil, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	err := reserveMarker(filepath.Join(notADirectory, DefaultMarkerName+guestCopySuffix))
+	if err == nil {
+		t.Fatal("reserveMarker() = nil, want the uncheckable name reported")
+	}
+	if !strings.Contains(err.Error(), DefaultMarkerName+guestCopySuffix) {
+		t.Errorf("reserveMarker() error = %v, want it to name the marker", err)
+	}
+}
+
 func TestWriteMarkerReportsAProjectItCannotWriteInto(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "no-such-directory", DefaultMarkerName)
 

@@ -35,8 +35,8 @@ type lifecycleStub struct {
 	// onUp runs while the machine comes back, so a test can change what the
 	// restarted machine reports.
 	onUp func()
-	// upElapsed and stackElapsed advance the fake clock, so the cached readiness
-	// targets are measured rather than assumed.
+	// upElapsed advances the fake clock, so the cached machine readiness target is
+	// measured rather than assumed.
 	upElapsed time.Duration
 	clock     *fakeClock
 }
@@ -403,6 +403,34 @@ func TestPersistenceValidateRefusesToOverwriteAnExistingFile(t *testing.T) {
 	}
 }
 
+// The guest copy is created by `cp`, which overwrites rather than refuses, and
+// is then removed with the rest of the run — so a name collision there would
+// destroy a repository file in the way the primary marker never can.
+func TestPersistenceValidateRefusesToOverwriteAnExistingGuestCopy(t *testing.T) {
+	test := newPersistenceHarness(t)
+	guestCopy := filepath.Join(test.projectDir, DefaultMarkerName+guestCopySuffix)
+	if err := os.WriteFile(guestCopy, []byte("real content\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := test.validate(t)
+	if err == nil || !strings.Contains(err.Error(), DefaultMarkerName+guestCopySuffix) {
+		t.Fatalf("Validate() error = %v, want it to name the existing guest copy", err)
+	}
+	data, readErr := os.ReadFile(guestCopy)
+	if readErr != nil || string(data) != "real content\n" {
+		t.Errorf("guest copy = %q (%v), want the existing file untouched", data, readErr)
+	}
+	// The refusal comes before anything is written, so the primary marker never
+	// reaches the project either.
+	if _, err := os.Stat(filepath.Join(test.projectDir, DefaultMarkerName)); !os.IsNotExist(err) {
+		t.Errorf("Stat(marker) error = %v, want nothing written", err)
+	}
+	if len(test.lifecycle.calls) != 0 {
+		t.Errorf("lifecycle calls = %v, want the machine untouched", test.lifecycle.calls)
+	}
+}
+
 func TestPersistenceValidateRejectsARecreatedVolume(t *testing.T) {
 	test := newPersistenceHarness(t)
 	test.lifecycle.onUp = func() {
@@ -460,6 +488,11 @@ func TestPersistenceValidateReportsPortsThatStayOpenAfterStop(t *testing.T) {
 	_, err := test.validate(t)
 	if err == nil || !strings.Contains(err.Error(), "3001") {
 		t.Fatalf("Validate() error = %v, want the still-answering macOS port named", err)
+	}
+	// The failure happens after `stop`, so the developer's stack is down and the
+	// error is the only thing that can say how to bring it back.
+	if !strings.Contains(err.Error(), "isolated-dev up "+test.projectDir) {
+		t.Errorf("Validate() error = %v, want it to name the `up` that restores the stack", err)
 	}
 }
 
@@ -607,5 +640,9 @@ func TestPersistenceValidateReportsAFailedRestart(t *testing.T) {
 	// A failed restart is exactly when the guest state has to be captured.
 	if test.diagnostics.Len() == 0 {
 		t.Error("diagnostics = empty, want the failure explained")
+	}
+	// The machine is stopped and stays stopped, which the error has to say.
+	if !strings.Contains(err.Error(), "isolated-dev up "+test.projectDir) {
+		t.Errorf("Validate() error = %v, want it to name the `up` that restores the stack", err)
 	}
 }

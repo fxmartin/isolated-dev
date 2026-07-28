@@ -533,7 +533,9 @@ containers, and the named volumes holding real data are left as they were found.
 The only things it writes into the repository are two marker files, which it
 refuses to create if the names are already taken and removes on every path,
 including a failing one. It restarts the Forge DEV stack, so run it only where
-that is what you want to happen:
+that is what you want to happen — and a run that fails between `stop` and `up`
+leaves the machine stopped, which it says, naming the `isolated-dev up` that
+brings the stack back:
 
 ```sh
 ISOLATED_DEV_RUN_HOST_TESTS=1 go test ./internal/forge \

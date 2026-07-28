@@ -275,7 +275,7 @@ func (persistence Persistence) perform(
 	closed, err := persistence.confirmPortsClosed(ctx, request)
 	report.Ports.ClosedAfterStop = closed
 	if err != nil {
-		return err
+		return withStoppedMachine(err, request)
 	}
 
 	restarted, err := persistence.restart(ctx, request, declaredArgs, report)
@@ -306,7 +306,10 @@ func (persistence Persistence) restart(
 ) (Result, error) {
 	machineStarted := persistence.now()
 	if err := persistence.Lifecycle.Up(ctx, request.ProjectPath, persistence.restartOutput()); err != nil {
-		return Result{}, fmt.Errorf("restart the project machine %q: %w", request.MachineName, err)
+		return Result{}, withStoppedMachine(
+			fmt.Errorf("restart the project machine %q: %w", request.MachineName, err),
+			request,
+		)
 	}
 	report.Timings = append(report.Timings, Timing{
 		Label:   "cached machine restart",
@@ -329,6 +332,18 @@ func (persistence Persistence) restart(
 		)
 	}
 	return restarted, nil
+}
+
+// withStoppedMachine says what a failure between `stop` and a working `up`
+// leaves behind. The run stops the developer's whole DEV stack on its way
+// through, and an error about a port or a machine name does not say that the
+// stack is still down or how to bring it back.
+func withStoppedMachine(cause error, request PersistenceRequest) error {
+	return fmt.Errorf(
+		"%w\nthe project machine is still stopped: run `isolated-dev up %s` to bring the Forge DEV stack back",
+		cause,
+		request.ProjectPath,
+	)
 }
 
 // captureVolumes records what each named volume is, so the restart can be shown
@@ -491,6 +506,12 @@ func (persistence Persistence) checkMountedEdits(
 	roundTrip := EditRoundTrip{HostPath: hostPath, GuestPath: guestPath}
 
 	content := markerContent(request.MachineName)
+	// The guest copy is created by `cp`, which overwrites rather than refuses, so
+	// its name is checked here — before anything is written — and the run stops
+	// if it is taken.
+	if err := reserveMarker(hostCopy); err != nil {
+		return roundTrip, err
+	}
 	if err := writeMarker(hostPath, content); err != nil {
 		return roundTrip, err
 	}
@@ -535,12 +556,15 @@ func (persistence Persistence) checkMountedEdits(
 		return roundTrip, err
 	}
 
+	// The macOS group is reported but not compared: the mount maps ownership onto
+	// whatever group the host assigns, which is not what makes a file usable
+	// here. The message names only the identity that is actually checked.
 	roundTrip.OwnershipMatched = roundTrip.GuestUID == request.GuestUID &&
 		roundTrip.GuestGID == request.GuestGID &&
 		roundTrip.HostUID == os.Getuid()
 	if !roundTrip.OwnershipMatched {
 		return roundTrip, fmt.Errorf(
-			"the file Linux created at %s has ownership %d:%d in the guest and %d:%d on macOS, but the provisioned guest identity is %d:%d and macOS runs as %d:%d; files created on either side would not be usable on the other",
+			"the file Linux created at %s has ownership %d:%d in the guest and %d:%d on macOS, but the provisioned guest identity is %d:%d and macOS runs as uid %d; files created on either side would not be usable on the other",
 			guestCopy,
 			roundTrip.GuestUID,
 			roundTrip.GuestGID,
@@ -549,7 +573,6 @@ func (persistence Persistence) checkMountedEdits(
 			request.GuestUID,
 			request.GuestGID,
 			os.Getuid(),
-			os.Getgid(),
 		)
 	}
 	return roundTrip, nil
@@ -570,6 +593,28 @@ func writeMarker(hostPath string, content string) error {
 	if err := errors.Join(writeErr, file.Close()); err != nil {
 		os.Remove(hostPath)
 		return fmt.Errorf("write the mounted-edit marker %s: %w", filepath.Base(hostPath), err)
+	}
+	return nil
+}
+
+// reserveMarker refuses a marker name whose file is already there. It is what
+// writeMarker's O_EXCL is for the markers this side creates: the guest copy is
+// made inside the machine, where nothing can refuse it, and is removed when the
+// run ends — so a name that is taken has to fail before the run touches it.
+func reserveMarker(hostPath string) error {
+	_, err := os.Lstat(hostPath)
+	if err == nil {
+		return fmt.Errorf(
+			"the mounted-edit marker %s already exists: file exists; remove it or pass another marker name",
+			filepath.Base(hostPath),
+		)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf(
+			"check the mounted-edit marker %s: %w; remove it or pass another marker name",
+			filepath.Base(hostPath),
+			err,
+		)
 	}
 	return nil
 }
