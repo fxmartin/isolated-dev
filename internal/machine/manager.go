@@ -128,7 +128,10 @@ func (manager Manager) Stop(ctx context.Context, machineName string) error {
 	if err != nil {
 		return err
 	}
-	if !exists || strings.EqualFold(machine.Status, "stopped") {
+	// Apple Container accepts `machine stop` only for a running machine: it is a
+	// no-op for a stopped one and an invalid-state error for every other status,
+	// including the `unknown` left behind by a machine that failed to boot.
+	if !exists || !strings.EqualFold(machine.Status, "running") {
 		return nil
 	}
 	if err := manager.ensureOwned(machineName); err != nil {
@@ -159,11 +162,11 @@ func (manager Manager) Destroy(ctx context.Context, machineName string) error {
 		if err := manager.ensureOwned(machineName); err != nil {
 			return err
 		}
-		if !strings.EqualFold(machine.Status, "stopped") {
-			output, err := manager.Runner.Run(ctx, "container", "machine", "stop", machineName)
-			if err != nil {
-				return fmt.Errorf("stop machine %q before deletion: %w\n%s", machineName, err, output)
-			}
+		if strings.EqualFold(machine.Status, "running") {
+			// A failed stop is deliberately not fatal: `machine delete` refuses
+			// only a running machine, so the delete below reports the real
+			// blocker instead of dead-ending cleanup here.
+			_, _ = manager.Runner.Run(ctx, "container", "machine", "stop", machineName)
 		}
 		output, err := manager.Runner.Run(ctx, "container", "machine", "delete", machineName)
 		if err != nil {
@@ -225,17 +228,16 @@ func (manager Manager) validateUp(request Request) error {
 	if request.MemoryGB <= 0 {
 		return errors.New("memory must be positive")
 	}
-	if request.MountScope != "home" && request.MountScope != "repository" {
-		return fmt.Errorf("unsupported mount scope %q", request.MountScope)
+	if request.MountScope != "home" {
+		return fmt.Errorf(
+			"unsupported mount scope %q; Apple Container Machine 1.1.0 exposes the host only through --home-mount, so the full-home scope is the only one that mounts the project",
+			request.MountScope,
+		)
 	}
 	return nil
 }
 
 func (manager Manager) create(ctx context.Context, request Request) error {
-	homeMount := "none"
-	if request.MountScope == "home" {
-		homeMount = "rw"
-	}
 	output, err := manager.Runner.Run(
 		ctx,
 		"container",
@@ -243,7 +245,7 @@ func (manager Manager) create(ctx context.Context, request Request) error {
 		"--name", request.MachineName,
 		"--cpus", strconv.Itoa(request.CPUs),
 		"--memory", strconv.Itoa(request.MemoryGB)+"G",
-		"--home-mount", homeMount,
+		"--home-mount", "rw",
 		request.BaseImage,
 	)
 	if err != nil {

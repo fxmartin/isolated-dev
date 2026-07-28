@@ -15,7 +15,6 @@ Commit `.isolated-dev.toml` for portable project settings:
 ```toml
 version = 1
 base_image = "local/isolated-dev-base:1"
-mount_target = "/workspace"
 packages = ["nodejs"]
 
 [resources]
@@ -82,7 +81,9 @@ before changing lifecycle state.
 
 Apple Container Machine 1.1.0 does not expose disk allocation during machine
 creation, so `disk_gb` is not a supported configuration field and status does
-not present a disk size as applied or pinned.
+not present a disk size as applied or pinned. For the same reason the optional
+`mount_target` key is accepted and validated but not yet applied: the home mount
+keeps the repository at its host path inside the guest.
 
 Stopping preserves the machine and its persistent guest data:
 

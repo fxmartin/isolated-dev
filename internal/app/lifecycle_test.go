@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,7 @@ type lifecycleStub struct {
 	upErr      error
 	stopErr    error
 	destroyErr error
+	upExisting bool
 }
 
 func (lifecycle *lifecycleStub) Up(
@@ -26,7 +28,7 @@ func (lifecycle *lifecycleStub) Up(
 	request machine.Request,
 ) (machine.UpResult, error) {
 	lifecycle.upRequests = append(lifecycle.upRequests, request)
-	return machine.UpResult{Created: true}, lifecycle.upErr
+	return machine.UpResult{Created: !lifecycle.upExisting}, lifecycle.upErr
 }
 
 func (lifecycle *lifecycleStub) Stop(_ context.Context, machineName string) error {
@@ -55,7 +57,7 @@ func TestUpResolvesProjectAndUsesEffectiveResources(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	lifecycle := &lifecycleStub{}
-	var warnings bytes.Buffer
+	var warnings, summary bytes.Buffer
 	application := App{
 		HostChecker:    passingHostChecker(),
 		MachineManager: lifecycle,
@@ -63,12 +65,8 @@ func TestUpResolvesProjectAndUsesEffectiveResources(t *testing.T) {
 		WarningOutput:  &warnings,
 	}
 
-	result, err := application.Up(context.Background(), repository)
-	if err != nil {
+	if err := application.Up(context.Background(), repository, &summary); err != nil {
 		t.Fatalf("Up() error = %v", err)
-	}
-	if !result.Created {
-		t.Fatal("Up() Created = false, want true")
 	}
 	if len(lifecycle.upRequests) != 1 {
 		t.Fatalf("up requests = %+v", lifecycle.upRequests)
@@ -80,6 +78,9 @@ func TestUpResolvesProjectAndUsesEffectiveResources(t *testing.T) {
 	}
 	if request.ProjectPath != canonicalRepository {
 		t.Errorf("ProjectPath = %q, want %q", request.ProjectPath, canonicalRepository)
+	}
+	if got, want := summary.String(), "created "+canonicalRepository+"\n"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
 	}
 	if request.CPUs != 6 || request.MemoryGB != 12 {
 		t.Errorf("resources = %d CPU/%d GB, want 6 CPU/12 GB", request.CPUs, request.MemoryGB)
@@ -106,7 +107,7 @@ func TestUpRejectsRepositoryOutsideHomeBeforeLifecycleMutation(t *testing.T) {
 		HomeDir:        t.TempDir(),
 	}
 
-	_, err := application.Up(context.Background(), repository)
+	err := application.Up(context.Background(), repository, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "outside the mounted home directory") {
 		t.Fatalf("Up() error = %v, want unsupported out-of-home repository guidance", err)
 	}

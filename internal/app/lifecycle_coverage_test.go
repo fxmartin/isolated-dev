@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,7 +96,102 @@ func TestUpReportsBoundaryFailures(t *testing.T) {
 			if path != "" {
 				application.HomeDir = filepath.Dir(path)
 			}
-			_, err := application.Up(context.Background(), path)
+			err := application.Up(context.Background(), path, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Up() error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+// The shipped binary never injects HomeDir, so the os.UserHomeDir() fallback is
+// the branch that actually gates the full-home mount in production.
+func TestUpFallsBackToTheOperatingSystemHomeDirectory(t *testing.T) {
+	home := t.TempDir()
+	repository := filepath.Join(home, "app")
+	if err := os.MkdirAll(filepath.Join(repository, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	lifecycle := &lifecycleStub{upExisting: true}
+	var summary bytes.Buffer
+	application := App{
+		HostChecker:    passingHostChecker(),
+		MachineManager: lifecycle,
+	}
+
+	if err := application.Up(context.Background(), repository, &summary); err != nil {
+		t.Fatalf("Up() error = %v", err)
+	}
+	if len(lifecycle.upRequests) != 1 {
+		t.Fatalf("up requests = %+v, want one", lifecycle.upRequests)
+	}
+	if !strings.HasPrefix(summary.String(), "ready ") {
+		t.Errorf("summary = %q, want converged machine reported as ready", summary.String())
+	}
+}
+
+func TestUpRejectsRepositoryOutsideTheOperatingSystemHome(t *testing.T) {
+	repository := appRepository(t)
+	t.Setenv("HOME", t.TempDir())
+
+	lifecycle := &lifecycleStub{}
+	application := App{
+		HostChecker:    passingHostChecker(),
+		MachineManager: lifecycle,
+	}
+
+	err := application.Up(context.Background(), repository, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "outside the mounted home directory") {
+		t.Fatalf("Up() error = %v, want out-of-home rejection", err)
+	}
+	if len(lifecycle.upRequests) != 0 {
+		t.Fatalf("up requests = %+v, want no lifecycle mutation", lifecycle.upRequests)
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("broken pipe")
+}
+
+func TestUpReportsOutputFailures(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		warningOutput io.Writer
+		output        io.Writer
+		want          string
+	}{
+		{
+			name:          "warning",
+			warningOutput: failingWriter{},
+			output:        io.Discard,
+			want:          "write full-home mount warning",
+		},
+		{
+			name:   "summary",
+			output: failingWriter{},
+			want:   "write up summary",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			repository := appRepository(t)
+			application := App{
+				HostChecker:    passingHostChecker(),
+				MachineManager: &lifecycleStub{},
+				HomeDir:        filepath.Dir(repository),
+				WarningOutput:  test.warningOutput,
+			}
+
+			err := application.Up(context.Background(), repository, test.output)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Up() error = %v, want containing %q", err, test.want)
 			}

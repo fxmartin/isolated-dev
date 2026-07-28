@@ -43,16 +43,7 @@ func main() {
 			return application.Status(context.Background(), path, os.Stdout)
 		},
 		Up: func(path string) error {
-			result, err := application.Up(context.Background(), path)
-			if err != nil {
-				return err
-			}
-			if result.Created {
-				os.Stdout.WriteString("created " + path + "\n")
-			} else {
-				os.Stdout.WriteString("ready " + path + "\n")
-			}
-			return nil
+			return application.Up(context.Background(), path, os.Stdout)
 		},
 		Stop: func(path string) error {
 			return application.Stop(context.Background(), path)

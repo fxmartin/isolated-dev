@@ -70,33 +70,33 @@ func (app App) Status(ctx context.Context, projectPath string, output io.Writer)
 	return statusview.Write(output, snapshot)
 }
 
-func (app App) Up(ctx context.Context, projectPath string) (machine.UpResult, error) {
+func (app App) Up(ctx context.Context, projectPath string, output io.Writer) error {
 	resolved, err := project.Resolve(projectPath)
 	if err != nil {
-		return machine.UpResult{}, err
+		return err
 	}
 	effectiveConfig, err := config.Load(resolved.Path)
 	if err != nil {
-		return machine.UpResult{}, err
+		return err
 	}
 	if _, err := app.HostChecker.Check(ctx); err != nil {
-		return machine.UpResult{}, err
+		return err
 	}
 	if app.MachineManager == nil {
-		return machine.UpResult{}, errors.New("machine lifecycle is not configured")
+		return errors.New("machine lifecycle is not configured")
 	}
 	if err := app.validateHomeMountedProject(resolved.Path); err != nil {
-		return machine.UpResult{}, err
+		return err
 	}
 	if app.WarningOutput != nil {
 		if _, err := fmt.Fprintln(
 			app.WarningOutput,
 			"warning: this machine receives read-write access to your full home directory",
 		); err != nil {
-			return machine.UpResult{}, fmt.Errorf("write full-home mount warning: %w", err)
+			return fmt.Errorf("write full-home mount warning: %w", err)
 		}
 	}
-	return app.MachineManager.Up(ctx, machine.Request{
+	result, err := app.MachineManager.Up(ctx, machine.Request{
 		ProjectPath:      resolved.Path,
 		MachineName:      resolved.MachineName,
 		BaseImage:        effectiveConfig.BaseImage,
@@ -105,6 +105,17 @@ func (app App) Up(ctx context.Context, projectPath string) (machine.UpResult, er
 		MemoryGB:         effectiveConfig.Resources.MemoryGB,
 		MountScope:       "home",
 	})
+	if err != nil {
+		return err
+	}
+	outcome := "ready"
+	if result.Created {
+		outcome = "created"
+	}
+	if _, err := fmt.Fprintf(output, "%s %s\n", outcome, resolved.Path); err != nil {
+		return fmt.Errorf("write up summary: %w", err)
+	}
+	return nil
 }
 
 func (app App) validateHomeMountedProject(projectPath string) error {

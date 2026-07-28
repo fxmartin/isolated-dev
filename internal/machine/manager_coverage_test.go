@@ -3,7 +3,6 @@ package machine
 import (
 	"context"
 	"errors"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -255,27 +254,26 @@ func TestUpReusesManagedMachineWithDefaultReadinessSettings(t *testing.T) {
 	}
 }
 
-func TestUpUsesRepositoryOnlyMount(t *testing.T) {
+func TestUpRejectsRepositoryOnlyMountScope(t *testing.T) {
 	t.Parallel()
 
 	request := validRequest()
 	request.MountScope = "repository"
-	runner := &runnerStub{responses: []response{
-		{output: []byte("[]")},
-		{},
-		{},
-	}}
+	runner := &runnerStub{}
 	manager := Manager{
 		Runner:       runner,
 		StateStore:   &stateStoreStub{loadErr: state.ErrNotFound},
 		DockerWaiter: &dockerWaiterStub{},
 	}
 
-	if _, err := manager.Up(context.Background(), request); err != nil {
-		t.Fatalf("Up() error = %v", err)
+	// `container machine create` has no bind-mount flag, so a repository-only
+	// scope would silently mount nothing rather than the project.
+	_, err := manager.Up(context.Background(), request)
+	if err == nil || !strings.Contains(err.Error(), "unsupported mount scope") {
+		t.Fatalf("Up() error = %v, want unsupported mount scope", err)
 	}
-	if got := runner.calls[1].args; !reflect.DeepEqual(got[8:10], []string{"--home-mount", "none"}) {
-		t.Fatalf("create mount args = %#v, want repository-only mount", got)
+	if len(runner.calls) != 0 {
+		t.Fatalf("calls = %+v, want no host mutation", runner.calls)
 	}
 }
 
@@ -303,6 +301,15 @@ func TestStopHandlesOwnedMachineStatesAndFailures(t *testing.T) {
 			name: "already stopped",
 			manager: Manager{Runner: &runnerStub{responses: []response{{
 				output: []byte(`[{"id":"isolated-dev-app-abcd1234","status":"STOPPED"}]`),
+			}}}},
+			calls: 1,
+		},
+		{
+			// `container machine stop` rejects every status but running and
+			// stopped, so an unbootable machine must not be stopped.
+			name: "never booted",
+			manager: Manager{Runner: &runnerStub{responses: []response{{
+				output: []byte(`[{"id":"isolated-dev-app-abcd1234","status":"unknown"}]`),
 			}}}},
 			calls: 1,
 		},
@@ -428,17 +435,45 @@ func TestDestroyHandlesCleanupFailures(t *testing.T) {
 			wantCalls: 1,
 		},
 		{
-			name: "stop failure",
+			// A machine that never booted is deleted directly: `machine stop`
+			// would fail on it, while `machine delete` refuses only running.
+			name: "never booted machine skips stop",
 			manager: Manager{
 				Runner: &runnerStub{responses: []response{
-					{output: []byte(`[{"id":"isolated-dev-app-abcd1234","status":"running"}]`)},
-					{output: []byte("busy"), err: errors.New("exit 1")},
+					{output: []byte(`[{"id":"isolated-dev-app-abcd1234","status":"unknown"}]`)},
+					{},
 				}},
 				StateStore: &stateStoreStub{project: state.Project{MachineName: machineName}},
 			},
 			target:    machineName,
-			want:      "before deletion",
 			wantCalls: 2,
+		},
+		{
+			name: "stop failure still deletes",
+			manager: Manager{
+				Runner: &runnerStub{responses: []response{
+					{output: []byte(`[{"id":"isolated-dev-app-abcd1234","status":"running"}]`)},
+					{output: []byte("busy"), err: errors.New("exit 1")},
+					{},
+				}},
+				StateStore: &stateStoreStub{project: state.Project{MachineName: machineName}},
+			},
+			target:    machineName,
+			wantCalls: 3,
+		},
+		{
+			name: "stop failure surfaces the delete blocker",
+			manager: Manager{
+				Runner: &runnerStub{responses: []response{
+					{output: []byte(`[{"id":"isolated-dev-app-abcd1234","status":"running"}]`)},
+					{output: []byte("busy"), err: errors.New("exit 1")},
+					{output: []byte("machine is running"), err: errors.New("exit 1")},
+				}},
+				StateStore: &stateStoreStub{project: state.Project{MachineName: machineName}},
+			},
+			target:    machineName,
+			want:      "delete machine",
+			wantCalls: 3,
 		},
 		{
 			name: "delete machine failure",
