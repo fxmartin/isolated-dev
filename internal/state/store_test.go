@@ -3,6 +3,7 @@ package state
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -84,6 +85,56 @@ func TestStoreRoundTripsGuestIdentityAndToleratesItsAbsence(t *testing.T) {
 	}
 	if loaded.GuestUser != "" || loaded.GuestUID != 0 || loaded.GuestProjectPath != "" {
 		t.Errorf("legacy state = %+v, want no guest identity", loaded)
+	}
+}
+
+// The managed SSH host is rebuilt from the recorded address on every `up`, so
+// the address has to survive a round trip. Machines created before SSH access
+// existed carry no address and must still load.
+func TestStoreRoundTripsTheSSHAddressAndToleratesItsAbsence(t *testing.T) {
+	t.Parallel()
+
+	store := Store{Root: t.TempDir()}
+	want := Project{
+		SchemaVersion: 1,
+		ProjectPath:   "/Users/fx/dev/app",
+		MachineName:   "isolated-dev-app-abcd1234",
+		BaseImage:     "isolated-dev-base:1",
+		MountScope:    "repository",
+		SSHAddress:    "192.168.64.5",
+	}
+	if err := store.Save(want); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	got, err := store.Load(want.MachineName)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("Load() = %+v, want %+v", got, want)
+	}
+
+	unreachable := want
+	unreachable.MachineName = "isolated-dev-app-eeee0000"
+	unreachable.SSHAddress = ""
+	if err := store.Save(unreachable); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	// An address that was never resolved is omitted rather than recorded as an
+	// empty host name that would render an unusable SSH block.
+	encoded, err := os.ReadFile(filepath.Join(store.Root, unreachable.MachineName+".json"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if strings.Contains(string(encoded), "ssh_address") {
+		t.Errorf("state = %s, want no recorded address", encoded)
+	}
+	loaded, err := store.Load(unreachable.MachineName)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.SSHAddress != "" {
+		t.Errorf("SSHAddress = %q, want it absent", loaded.SSHAddress)
 	}
 }
 

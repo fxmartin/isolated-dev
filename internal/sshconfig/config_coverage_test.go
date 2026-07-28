@@ -173,6 +173,85 @@ func TestForgetHostKeyReportsHostSideFailures(t *testing.T) {
 	}
 }
 
+// Cleanup runs against whatever SSH directory the caller resolved. A directory
+// that could never hold the managed file has to be rejected before Remove and
+// ForgetHostKey start rewriting paths derived from it.
+func TestCleanupRejectsAnUnusableSSHDirectory(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"relative":         ".ssh",
+		"embedded quote":   `/home/fx/"ssh`,
+		"embedded newline": "/home/fx/.ssh\nHost evil",
+	}
+	for name, sshDir := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			manager := Manager{SSHDir: sshDir}
+
+			err := manager.Remove(coverageEntry.Alias)
+			if err == nil || !strings.Contains(err.Error(), "invalid SSH directory") {
+				t.Errorf("Remove() error = %v, want an invalid-directory failure", err)
+			}
+			err = manager.ForgetHostKey(coverageEntry.Alias)
+			if err == nil || !strings.Contains(err.Error(), "invalid SSH directory") {
+				t.Errorf("ForgetHostKey() error = %v, want an invalid-directory failure", err)
+			}
+		})
+	}
+}
+
+// Every managed file is written through the same atomic replace, so its two
+// host-side failure modes are covered once here rather than per caller.
+func TestWriteAtomicReportsHostSideFailures(t *testing.T) {
+	t.Parallel()
+
+	t.Run("directory cannot be created", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		blocker := filepath.Join(root, "blocker")
+		if err := os.WriteFile(blocker, []byte("not a directory\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+
+		err := writeAtomic(filepath.Join(blocker, "config"), "Host example\n")
+		if err == nil || !strings.Contains(err.Error(), "create") {
+			t.Fatalf("writeAtomic() error = %v, want a directory-creation failure", err)
+		}
+	})
+
+	t.Run("destination cannot be replaced", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		// A non-empty directory at the destination cannot be replaced by a rename.
+		destination := filepath.Join(root, "config")
+		if err := os.Mkdir(destination, 0o700); err != nil {
+			t.Fatalf("Mkdir() error = %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(destination, "blocker"), []byte("x"), 0o600); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+
+		err := writeAtomic(destination, "Host example\n")
+		if err == nil || !strings.Contains(err.Error(), "replace") {
+			t.Fatalf("writeAtomic() error = %v, want a replacement failure", err)
+		}
+
+		// The temporary file must not survive a failed replace, or the next
+		// reconciliation would find a stray file in the managed directory.
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			t.Fatalf("ReadDir() error = %v", err)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("directory entries = %d, want only the untouched destination", len(entries))
+		}
+	})
+}
+
 func TestManagedFileKeepsUnrelatedHostBlocksVerbatim(t *testing.T) {
 	t.Parallel()
 
