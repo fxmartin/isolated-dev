@@ -1,0 +1,217 @@
+package smoke
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"text/template"
+)
+
+// The baseline workload is pinned. It exists to detect regressions in
+// Docker-in-Container-Machine, so a moving tag would report an upstream image
+// change as a failure of this repository.
+const (
+	OriginImage = "busybox:1.37"
+	ProxyImage  = "nginx:1.27-alpine"
+)
+
+const (
+	// OriginService serves the marker file straight from the macOS mount.
+	OriginService = "origin"
+	// ProxyService reaches OriginService by service name over the private
+	// Compose network, which is the nested behaviour the baseline proves.
+	ProxyService = "proxy"
+	// NetworkName is the Compose network the two services share. Compose
+	// prefixes it with the project name.
+	NetworkName = "baseline"
+
+	MarkerFileName  = "marker.txt"
+	ComposeFileName = "docker-compose.yml"
+	NginxFileName   = "nginx.conf"
+
+	// originPort is the BusyBox HTTP port inside the private network. It is
+	// never published: only the proxy is reachable from outside.
+	originPort = 8080
+)
+
+// composeProjectNamePattern is what Docker Compose accepts as a project name.
+// It is stricter than the machine-name pattern, so the project name is derived
+// rather than reused.
+var composeProjectNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+
+// Fixture is the temporary Compose workload written on the macOS side of the
+// mount. Every path it names belongs to the baseline test and is removed again
+// by Remove.
+type Fixture struct {
+	Dir         string
+	ProjectName string
+	Marker      string
+	HostPort    int
+}
+
+// NetworkName is the private network Compose creates for this project.
+func (fixture Fixture) NetworkName() string {
+	return fixture.ProjectName + "_" + NetworkName
+}
+
+// ContainerName is the container Compose creates for a service, which is what
+// `docker inspect` needs to confirm the image that actually started.
+func (fixture Fixture) ContainerName(service string) string {
+	return fixture.ProjectName + "-" + service + "-1"
+}
+
+// Remove deletes the fixture directory and nothing else.
+func (fixture Fixture) Remove() error {
+	if fixture.Dir == "" {
+		return nil
+	}
+	if err := os.RemoveAll(fixture.Dir); err != nil {
+		return fmt.Errorf("remove baseline fixtures %s: %w", fixture.Dir, err)
+	}
+	return nil
+}
+
+// WriteFixture materialises the two-image baseline workload in dir.
+func WriteFixture(dir string, projectName string, marker string, hostPort int) (Fixture, error) {
+	if !composeProjectNamePattern.MatchString(projectName) {
+		return Fixture{}, fmt.Errorf(
+			"invalid Compose project name %q: it must start with a lower-case letter or digit and contain only lower-case letters, digits, hyphens, and underscores",
+			projectName,
+		)
+	}
+	if !filepath.IsAbs(dir) {
+		return Fixture{}, fmt.Errorf("baseline fixture directory %q must be absolute", dir)
+	}
+	if marker == "" {
+		return Fixture{}, fmt.Errorf("baseline marker must not be empty")
+	}
+	if hostPort < 1 || hostPort > 65535 {
+		return Fixture{}, fmt.Errorf("baseline host port %d is outside 1-65535", hostPort)
+	}
+
+	fixture := Fixture{Dir: dir, ProjectName: projectName, Marker: marker, HostPort: hostPort}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return Fixture{}, fmt.Errorf("create baseline fixture directory %s: %w", dir, err)
+	}
+
+	compose, err := render(composeTemplate, fixture)
+	if err != nil {
+		return Fixture{}, err
+	}
+	nginx, err := render(nginxTemplate, fixture)
+	if err != nil {
+		return Fixture{}, err
+	}
+	// The marker ends with a newline so a shell that prints it reads normally;
+	// every comparison trims it.
+	for _, file := range []struct {
+		name string
+		data []byte
+	}{
+		{name: MarkerFileName, data: []byte(marker + "\n")},
+		{name: ComposeFileName, data: compose},
+		{name: NginxFileName, data: nginx},
+	} {
+		path := filepath.Join(dir, file.name)
+		if err := os.WriteFile(path, file.data, 0o644); err != nil {
+			return Fixture{}, fmt.Errorf("write baseline fixture %s: %w", path, err)
+		}
+	}
+	return fixture, nil
+}
+
+func render(tmpl *template.Template, fixture Fixture) ([]byte, error) {
+	var rendered bytes.Buffer
+	data := struct {
+		Fixture
+		OriginService  string
+		ProxyService   string
+		OriginImage    string
+		ProxyImage     string
+		OriginPort     int
+		Network        string
+		MarkerFileName string
+		NginxFileName  string
+	}{
+		Fixture:        fixture,
+		OriginService:  OriginService,
+		ProxyService:   ProxyService,
+		OriginImage:    OriginImage,
+		ProxyImage:     ProxyImage,
+		OriginPort:     originPort,
+		Network:        NetworkName,
+		MarkerFileName: MarkerFileName,
+		NginxFileName:  NginxFileName,
+	}
+	if err := tmpl.Execute(&rendered, data); err != nil {
+		return nil, fmt.Errorf("render baseline fixture %s: %w", tmpl.Name(), err)
+	}
+	return rendered.Bytes(), nil
+}
+
+var composeTemplate = template.Must(template.New(ComposeFileName).Parse(
+	`# Generated by isolated-dev for the baseline nested-Compose test.
+# Both images are pinned: this workload exists to detect regressions in
+# Docker-in-Container-Machine, so a moving tag would report an upstream change
+# as a failure of this repository.
+name: {{.ProjectName}}
+
+services:
+  {{.OriginService}}:
+    image: {{.OriginImage}}
+    # The marker is served straight from the macOS mount, so a response that
+    # carries it proves both mount layers: macOS into the machine, and the
+    # machine path into the container.
+    command: ["httpd", "-f", "-p", "{{.OriginPort}}", "-h", "/srv"]
+    volumes:
+      - ./{{.MarkerFileName}}:/srv/{{.MarkerFileName}}:ro
+    networks:
+      - {{.Network}}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:{{.OriginPort}}/{{.MarkerFileName}}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  {{.ProxyService}}:
+    image: {{.ProxyImage}}
+    depends_on:
+      {{.OriginService}}:
+        condition: service_healthy
+    # Only the proxy is published. BusyBox stays reachable solely by service
+    # name on the private network, which is what the baseline has to prove.
+    ports:
+      - "0.0.0.0:{{.HostPort}}:80"
+    volumes:
+      - ./{{.NginxFileName}}:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - {{.Network}}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/{{.MarkerFileName}}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+networks:
+  {{.Network}}:
+    driver: bridge
+`))
+
+var nginxTemplate = template.Must(template.New(NginxFileName).Parse(
+	`# Generated by isolated-dev for the baseline nested-Compose test.
+server {
+    listen 80;
+
+    # Docker's embedded DNS resolves the upstream per request rather than once
+    # at startup: a variable in proxy_pass defers resolution, so a BusyBox that
+    # is still starting cannot make Nginx exit before the test even probes it.
+    resolver 127.0.0.11 valid=5s ipv6=off;
+
+    location / {
+        set $baseline_origin http://{{.OriginService}}:{{.OriginPort}};
+        proxy_pass $baseline_origin$request_uri;
+    }
+}
+`))

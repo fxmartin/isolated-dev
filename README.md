@@ -376,6 +376,30 @@ ISOLATED_DEV_RUN_HOST_TESTS=1 go test ./internal/projectcmd \
   -run TestHostRunsDeclaredCommandsInTheGuest -count=1 -v
 ```
 
+The baseline nested-Compose test is the automated proof that Docker still runs
+inside an Apple Container Machine, and it should pass before any real workload
+is used as an acceptance test. It builds a base image of its own, creates one
+fresh machine from it, starts pinned `busybox:1.37` and `nginx:1.27-alpine`
+images on a private Compose network, and reads a macOS-authored marker file
+back both from inside the guest and from macOS through the published guest
+port — which exercises Compose, service-name networking, and both mount layers
+at once. Whether it passes or fails it removes its own containers, network,
+machine, base image, and temporary fixtures, and it touches nothing else: it
+refuses to run on the shared `local/isolated-dev-base:1` version precisely
+because teardown deletes the image it builds. A failing step first captures the
+machine list, `systemctl is-system-running`, `docker info`, and the Compose
+state and logs, which is what makes the known Apple Container 1.1.0 startup
+race — a terminated systemd and an absent Docker daemon — visible rather than
+just a timeout. That race is also what the readiness fallback recovers from:
+`dockerd` is started directly, and readiness is confirmed again immediately
+before Compose runs. It is destructive and slow, so run it only on a disposable
+Apple Container development host:
+
+```sh
+ISOLATED_DEV_RUN_HOST_TESTS=1 go test ./internal/smoke \
+  -run TestHostRunsTheBaselineNestedComposeWorkload -count=1 -v -timeout 40m
+```
+
 The Zed check is not destructive and needs no machine. It resolves the real
 `zed` CLI the way `open` does, confirms the installed build is invocable, and
 verifies the `ssh://` target decodes back to exactly the managed alias and guest
