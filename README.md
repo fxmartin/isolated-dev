@@ -155,6 +155,59 @@ lifecycle state. It requires an explicit confirmation flag:
 isolated-dev destroy --yes /path/to/repository
 ```
 
+## Zed and SSH Access
+
+Every `up` also reconciles the SSH host that Zed connects through, and reports
+it alongside the guest identity:
+
+```
+created /Users/fx/dev/app
+guest fx (501:20) at /Users/fx/dev/app
+ssh isolated-dev-app-abcd1234 (fx@192.168.64.5)
+```
+
+The alias is the project machine name, so `ssh isolated-dev-app-abcd1234` works
+from any terminal. Apple Container Machine 1.1.0 does not report a machine
+address, so it is read from inside the guest after provisioning starts `sshd`;
+addresses on the Docker bridges the guest runs itself are ignored because macOS
+cannot reach them.
+
+Everything `isolated-dev` generates lives in `~/.ssh/isolated-dev/`:
+`config` holds one host block per project machine, and `known_hosts` holds their
+host keys. Your `~/.ssh/config` receives a single `Include` directive, added
+once at the top; no developer-owned entry is ever rewritten, reordered, or
+removed. Both files are written atomically with `0600` permissions. Because the
+host block pins `HostKeyAlias` to the machine name, a machine that comes back at
+a different address keeps working, and a recreated machine has its stale host
+key dropped before the first connection. `destroy` removes the machine's host
+block and host keys; repeating it is safe.
+
+`open` reconciles the machine, its guest identity, and its SSH host, then opens
+the mounted project in Zed's SSH remote-development mode:
+
+```sh
+isolated-dev open /path/to/repository
+```
+
+```
+ready /Users/fx/dev/app
+guest fx (501:20) at /Users/fx/dev/app
+ssh isolated-dev-app-abcd1234 (fx@192.168.64.5)
+opening /Users/fx/dev/app in Zed over isolated-dev-app-abcd1234
+```
+
+A stopped machine, a machine that moved, and a machine that was never created
+all reach the same state, so `open` needs no separate `up`. It requires Zed's
+`zed` command on `PATH`; install it from Zed's command palette with
+`cli: install cli`.
+
+`status` reports the managed host, and `not-configured` until the first `up`
+has established one:
+
+```
+SSH: isolated-dev-app-abcd1234 (fx@192.168.64.5)
+```
+
 ## Base-Image Upgrades
 
 A machine keeps running the base image it was created from. Pointing
@@ -237,7 +290,28 @@ ISOLATED_DEV_RUN_HOST_TESTS=1 go test ./internal/guest \
   -run TestHostProvisionsGuestIdentityAndCredentials -count=1 -v
 ```
 
+The SSH test is destructive in the same way. It creates one machine, configures
+the managed host with a throwaway key, and connects through the developer-facing
+configuration — the path Zed takes — to verify login, a writable mounted
+project, agent forwarding, and tool-owned host keys:
+
+```sh
+ISOLATED_DEV_RUN_HOST_TESTS=1 go test ./internal/sshconfig \
+  -run TestHostConnectsOverManagedSSH -count=1 -v
+```
+
+The Zed check is not destructive and needs no machine. It resolves the real
+`zed` CLI the way `open` does, confirms the installed build is invocable, and
+verifies the `ssh://` target decodes back to exactly the managed alias and guest
+project path. It stops before launching a window, which no unattended run can
+assert on:
+
+```sh
+ISOLATED_DEV_RUN_HOST_TESTS=1 go test ./internal/zed \
+  -run TestHostZedCLIOpensTheManagedTarget -count=1 -v
+```
+
 `status` is read-only. It validates the canonical Git repository path and host
 prerequisites, then reports effective resources, the guest identity and mounted
-project path, and the project machine, base-image, mount, and tunnel state
+project path, and the project machine, base-image, mount, SSH, and tunnel state
 without displaying secret references.

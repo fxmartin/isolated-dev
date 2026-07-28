@@ -323,6 +323,16 @@ func TestStopHandlesOwnedMachineStatesAndFailures(t *testing.T) {
 			calls: 1,
 		},
 		{
+			// Ownership cannot be established without a state store, and a
+			// machine of unknown ownership must never be stopped.
+			name: "missing state store",
+			manager: Manager{Runner: &runnerStub{responses: []response{{
+				output: []byte(`[{"id":"isolated-dev-app-abcd1234","status":"running"}]`),
+			}}}},
+			want:  "project state store is not configured",
+			calls: 1,
+		},
+		{
 			name: "unmanaged",
 			manager: Manager{
 				Runner: &runnerStub{responses: []response{{

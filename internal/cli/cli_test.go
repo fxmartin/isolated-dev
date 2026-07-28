@@ -81,6 +81,36 @@ func TestUpInvokesLifecycleDependency(t *testing.T) {
 	}
 }
 
+func TestOpenInvokesTheZedDependency(t *testing.T) {
+	t.Parallel()
+
+	var stderr bytes.Buffer
+	openPath := ""
+	mutated := false
+	exitCode := Run([]string{"open", "/tmp/project"}, Dependencies{
+		Stdout: &bytes.Buffer{},
+		Stderr: &stderr,
+		Open: func(path string) error {
+			openPath = path
+			return nil
+		},
+		OnMutate: func() {
+			mutated = true
+		},
+	})
+
+	if exitCode != 0 {
+		t.Fatalf("Run() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
+	}
+	if openPath != "/tmp/project" {
+		t.Errorf("open path = %q, want /tmp/project", openPath)
+	}
+	// `open` reconciles the machine before Zed connects, so it mutates.
+	if !mutated {
+		t.Error("open did not report a mutation")
+	}
+}
+
 func TestStopInvokesLifecycleDependency(t *testing.T) {
 	t.Parallel()
 
