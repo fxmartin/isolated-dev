@@ -17,7 +17,10 @@ type Dependencies struct {
 	Open func(string) error
 	// Upgrade previews the base-image recreation, and performs it only when
 	// the confirmation is passed through.
-	Upgrade  func(string, bool) error
+	Upgrade func(string, bool) error
+	// Run executes one explicitly declared project command and reports the exit
+	// status that command produced.
+	Run      func(string, string) (int, error)
 	OnMutate func()
 }
 
@@ -69,12 +72,40 @@ func Run(args []string, deps Dependencies) int {
 		fmt.Fprintln(deps.Stderr, "destroy: pass --yes to confirm deletion of the project machine and persistent data")
 		return 2
 	}
+	// Only a command the project declares by name can be run, so the name is
+	// required rather than inferred from the repository.
+	if len(args) == 3 && args[0] == "run" {
+		return runProjectCommand(args[1], args[2], deps)
+	}
+	if len(args) == 2 && args[0] == "run" {
+		fmt.Fprintln(deps.Stderr, "run: pass the declared command name, as in `isolated-dev run PROJECT COMMAND`")
+		return 2
+	}
 
 	fmt.Fprintln(
 		deps.Stderr,
-		"usage: isolated-dev <up PROJECT|open PROJECT|status PROJECT|stop PROJECT|upgrade [--yes] PROJECT|destroy --yes PROJECT|--version>",
+		"usage: isolated-dev <up PROJECT|open PROJECT|run PROJECT COMMAND|status PROJECT|stop PROJECT|upgrade [--yes] PROJECT|destroy --yes PROJECT|--version>",
 	)
 	return 2
+}
+
+// runProjectCommand reports the guest command's own exit status. A command that
+// runs and fails is not a CLI error, so only a rejected or unrunnable command
+// writes to stderr.
+func runProjectCommand(projectPath string, commandName string, deps Dependencies) int {
+	if deps.Run == nil {
+		fmt.Fprintln(deps.Stderr, "run: command is unavailable")
+		return 1
+	}
+	if deps.OnMutate != nil {
+		deps.OnMutate()
+	}
+	exitCode, err := deps.Run(projectPath, commandName)
+	if err != nil {
+		fmt.Fprintf(deps.Stderr, "run: %v\n", err)
+		return 1
+	}
+	return exitCode
 }
 
 func runUpgrade(projectPath string, confirmed bool, deps Dependencies) int {

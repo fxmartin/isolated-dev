@@ -76,7 +76,7 @@ func TestValidateRejectsUnsafeEffectiveConfiguration(t *testing.T) {
 			mutate: func(cfg *Config) {
 				cfg.Commands = map[string]Command{" ": {Args: []string{"true"}}}
 			},
-			want: "commands. .args",
+			want: "must be a name usable as an `isolated-dev run` argument",
 		},
 		{
 			name: "empty command arguments",

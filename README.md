@@ -48,6 +48,13 @@ name = "web"
 host = 3100
 ```
 
+A `[commands.<name>]` section declares a command; it never runs on its own. See
+[Project Commands](#project-commands). `args` is the argument vector, with the
+program to run first — no shell parses it. The optional `workdir` is a
+project-relative directory the command runs in, and the optional `compose` flag
+marks a command that needs the guest Docker daemon. Command names must be
+usable as a single `isolated-dev run` argument.
+
 Inline secret values and unknown fields are rejected before any host or guest
 state changes. `secrets.environment` entries must be environment variable
 names, and `secrets.files` entries must be project-relative paths that stay
@@ -81,6 +88,10 @@ Create or restart the stable machine derived from a Git repository:
 ```sh
 isolated-dev up /path/to/repository
 ```
+
+`up` reconciles the machine, the guest account, and SSH access, and stops
+there: it never inspects the repository for services to start. Project commands
+are explicit — see [Project Commands](#project-commands).
 
 The current Apple Container 1.x integration uses a read-write full-home mount.
 The active `home` mount scope is recorded in project state and reported by
@@ -208,6 +219,60 @@ has established one:
 SSH: isolated-dev-app-abcd1234 (fx@192.168.64.5)
 ```
 
+## Project Commands
+
+`isolated-dev` never runs repository code on its own. `up`, `open`, `stop`,
+`upgrade`, and `destroy` do not look for a `docker-compose.yml`, a task-runner
+manifest, or a script directory, and they never start project services. A
+command exists only because `.isolated-dev.toml` declares it, and it runs only
+when you invoke it by that name:
+
+```toml
+[commands.dev]
+args = ["docker", "compose", "--profile", "dev", "up", "-d"]
+compose = true
+
+[commands.test]
+args = ["npm", "test"]
+workdir = "services/api"
+```
+
+```sh
+isolated-dev run /path/to/repository dev
+```
+
+The command runs inside the project machine as the provisioned non-root guest
+user, in the mounted project — or in the declared `workdir` beneath it. Its
+`args` are passed as a literal argument vector, so no shell on either side
+re-interprets them. Output streams to your terminal as it is produced, standard
+input is forwarded, and the command's exit status becomes `isolated-dev`'s own,
+so `run` composes with scripts and `&&` exactly as the underlying command
+would.
+
+A command declared with `compose = true` needs the guest Docker daemon, so
+`docker info` must succeed inside the machine before it starts. Readiness is
+retried, and the direct-daemon fallback is used if the daemon has not come up
+on its own. If Docker never answers, nothing is executed and the failure names
+the machine and how to inspect the daemon:
+
+```
+run: Docker is not ready in machine "isolated-dev-app-abcd1234": `docker info` did not
+succeed, so "dev" was not run; check the daemon with `ssh isolated-dev-app-abcd1234 sudo docker info`
+```
+
+A name the project does not declare is rejected before anything runs, and the
+rejection lists what the project does offer:
+
+```
+run: command "deploy" is not declared by this project; declared commands: dev, test
+```
+
+`run` needs a machine, so it reports which command to use when none exists yet:
+
+```
+run: no project machine exists for /Users/fx/dev/app; run `isolated-dev up /Users/fx/dev/app` first
+```
+
 ## Base-Image Upgrades
 
 A machine keeps running the base image it was created from. Pointing
@@ -298,6 +363,17 @@ project, agent forwarding, and tool-owned host keys:
 ```sh
 ISOLATED_DEV_RUN_HOST_TESTS=1 go test ./internal/sshconfig \
   -run TestHostConnectsOverManagedSSH -count=1 -v
+```
+
+The project-command test is destructive in the same way. It creates one
+machine, provisions it, and runs declared commands through the path `run`
+takes, verifying the non-root guest user, the mounted working directory, the
+declared `workdir`, preserved output and exit status, and a Compose command
+after `docker info` succeeds:
+
+```sh
+ISOLATED_DEV_RUN_HOST_TESTS=1 go test ./internal/projectcmd \
+  -run TestHostRunsDeclaredCommandsInTheGuest -count=1 -v
 ```
 
 The Zed check is not destructive and needs no machine. It resolves the real

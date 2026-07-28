@@ -14,6 +14,10 @@ import (
 
 var environmentNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// commandNamePattern keeps a declared command name usable as a single
+// `isolated-dev run` argument, so invoking one never depends on quoting.
+var commandNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
 const (
 	SharedFileName     = ".isolated-dev.toml"
 	LocalFileName      = ".isolated-dev.local.toml"
@@ -44,10 +48,17 @@ type Port struct {
 	Host  int    `toml:"host"`
 }
 
+// Command is a project command that exists only because configuration declares
+// it. Nothing in the repository — a Compose file, a task runner manifest, a
+// script directory — ever becomes a command on its own, and a declared command
+// runs only when it is invoked by name.
 type Command struct {
-	Args    []string `toml:"args"`
-	Workdir string   `toml:"workdir"`
-	Compose bool     `toml:"compose"`
+	Args []string `toml:"args"`
+	// Workdir is an optional project-relative directory the command runs in.
+	Workdir string `toml:"workdir"`
+	// Compose marks a command that needs the guest Docker daemon, so readiness
+	// is confirmed before it runs.
+	Compose bool `toml:"compose"`
 }
 
 type SecretReferences struct {
@@ -194,12 +205,60 @@ func validate(cfg Config) error {
 		}
 	}
 
-	for name, command := range cfg.Commands {
-		if strings.TrimSpace(name) == "" || len(command.Args) == 0 {
-			return fmt.Errorf("commands.%s.args: must not be empty", name)
+	for _, name := range cfg.CommandNames() {
+		if err := validateCommand(name, cfg.Commands[name]); err != nil {
+			return err
 		}
 	}
 	return validateSecrets(cfg.Secrets)
+}
+
+// CommandNames lists the declared command names in a stable order, so
+// diagnostics that enumerate them read the same way on every run.
+func (cfg Config) CommandNames() []string {
+	names := make([]string, 0, len(cfg.Commands))
+	for name := range cfg.Commands {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func validateCommand(name string, command Command) error {
+	if !commandNamePattern.MatchString(name) {
+		return fmt.Errorf(
+			"commands.%q: must be a name usable as an `isolated-dev run` argument",
+			name,
+		)
+	}
+	if len(command.Args) == 0 {
+		return fmt.Errorf("commands.%s.args: must not be empty", name)
+	}
+	program := strings.TrimSpace(command.Args[0])
+	// The first argument names the program to run. An empty one, or one shaped
+	// like an environment assignment, would change what the guest executes
+	// rather than which program it executes.
+	if program == "" || strings.Contains(program, "=") {
+		return fmt.Errorf(
+			"commands.%s.args[0]: must be the program to run, not an environment assignment",
+			name,
+		)
+	}
+	return validateCommandWorkdir(name, command.Workdir)
+}
+
+func validateCommandWorkdir(name string, workdir string) error {
+	if workdir == "" {
+		return nil
+	}
+	if filepath.IsAbs(workdir) {
+		return fmt.Errorf("commands.%s.workdir: must be a project-relative path", name)
+	}
+	cleaned := filepath.Clean(workdir)
+	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("commands.%s.workdir: must stay inside the project", name)
+	}
+	return nil
 }
 
 // validateSecrets keeps secret references pointing inside the mounted project
