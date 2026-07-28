@@ -65,17 +65,21 @@ release-readiness item that distribution beyond the first user requires.
 
 What that means in practice:
 
-- An archive downloaded through a browser carries the
-  `com.apple.quarantine` extended attribute. Gatekeeper refuses to run the
-  extracted binary and reports that it cannot be verified.
-- The documented workaround is for the user to remove that attribute
-  themselves, after verifying the published checksum:
+- An archive downloaded through a browser carries the `com.apple.quarantine`
+  extended attribute. What matters for the installed binary is how the archive
+  is *extracted*, not how it was fetched: `tar -xzf` does not propagate the
+  attribute to the extracted file, while Finder's Archive Utility applies it to
+  everything it unpacks. So the README's `tar` install path is unaffected, and
+  a double-clicked archive produces a binary Gatekeeper refuses to run,
+  reporting that it cannot be verified.
+- The documented workaround, for the Finder case, is for the user to remove
+  that attribute themselves, after verifying the published checksum:
   `xattr -d com.apple.quarantine /usr/local/bin/isolated-dev`. It is deliberate
   and informed; nothing in the build strips quarantine, disables Gatekeeper, or
-  ships an installer that does either.
-- `curl` does not set the quarantine attribute, so an archive fetched that way
-  runs without the step. That is a property of the download, not a security
-  guarantee — the checksum is what you actually verify against.
+  ships an installer that does either. On the `tar` path the same command exits
+  non-zero with `No such xattr`, because there is no attribute to remove.
+- Neither the download method nor the extraction method is a security guarantee
+  — the checksum is what you actually verify against.
 
 Making releases pass Gatekeeper unaided requires all of the following:
 

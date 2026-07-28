@@ -31,6 +31,7 @@ var (
 	commandTableRow = regexp.MustCompile("`isolated-dev ([^`]+)`")
 	scriptFlag      = regexp.MustCompile(`--[a-z][a-z-]*`)
 	nonSlugRune     = regexp.MustCompile(`[^a-z0-9 -]`)
+	systemInstall   = regexp.MustCompile(`(?m)^(sudo +)?install +.*/usr/local/bin`)
 )
 
 // headingAnchor reproduces GitHub's heading slugs closely enough for the
@@ -100,6 +101,40 @@ func TestDocumentedArtifactNamesMatchWhatTheScriptProduces(t *testing.T) {
 	// promises, so the published path is documented whole.
 	requireContains(t, "docs/releasing.md", readDocument(t, filepath.Join("docs", "releasing.md")),
 		"dist/"+documented)
+}
+
+// TestDocumentedInstallsIntoUsrLocalBinArePrivileged keeps the primary user
+// journey runnable. `/usr/local/bin` is root-owned on macOS and does not exist
+// at all on a Mac without Homebrew, so an unprivileged `install` into it stops
+// with `Permission denied` partway through the documented block — after the
+// reader has already verified a checksum and extracted an archive.
+func TestDocumentedInstallsIntoUsrLocalBinArePrivileged(t *testing.T) {
+	for _, document := range documentedFiles {
+		commands := systemInstall.FindAllString(readDocument(t, document), -1)
+		for _, command := range commands {
+			if !strings.HasPrefix(command, "sudo ") {
+				t.Errorf("%s documents %q, which fails because /usr/local/bin is root-owned", document, command)
+			}
+		}
+	}
+}
+
+// TestQuarantineGuidanceNamesTheExtractionThatAppliesIt keeps the Gatekeeper
+// advice true of what macOS actually does. `tar -xzf` does not propagate
+// `com.apple.quarantine` from the archive to the extracted file — Finder's
+// Archive Utility is what applies it — so guidance phrased around how the
+// archive was *downloaded* sends a reader who followed the documented `tar`
+// step to an `xattr -d` that exits non-zero with `No such xattr`.
+func TestQuarantineGuidanceNamesTheExtractionThatAppliesIt(t *testing.T) {
+	for _, document := range documentedFiles {
+		content := readDocument(t, document)
+		if !strings.Contains(content, "com.apple.quarantine") {
+			continue
+		}
+		label := document + " quarantine guidance"
+		requireContains(t, label, content, "Archive Utility")
+		requireContains(t, label, content, "No such xattr")
+	}
 }
 
 // TestEveryReleaseScriptFlagIsDocumented keeps the script's interface and its

@@ -39,21 +39,34 @@ and put the binary on your `PATH`:
 ```sh
 shasum -a 256 -c isolated-dev-<version>-darwin-arm64.tar.gz.sha256
 tar -xzf isolated-dev-<version>-darwin-arm64.tar.gz
-install -m 0755 isolated-dev /usr/local/bin/isolated-dev
+sudo install -d /usr/local/bin
+sudo install -m 0755 isolated-dev /usr/local/bin/isolated-dev
 isolated-dev --version
 ```
 
-Releases are not yet signed or notarized, so a binary downloaded through a
-browser carries macOS's quarantine attribute and Gatekeeper refuses to run it.
-Remove the attribute deliberately, after you have verified the checksum above:
+`/usr/local/bin` is root-owned on macOS and does not exist at all on a Mac
+without Homebrew, which is why both `install` steps need `sudo`. To stay
+unprivileged, install to `~/.local/bin` instead — `install -d ~/.local/bin &&
+install -m 0755 isolated-dev ~/.local/bin/isolated-dev` — and make sure that
+directory is on your `PATH`.
+
+Releases are not yet signed or notarized, so macOS's quarantine attribute is
+worth understanding. `tar -xzf` does **not** carry the attribute from the
+archive onto the extracted binary, so the commands above run as written no
+matter how you downloaded the archive. Finder is the case that differs: if you
+extract by double-clicking the archive, Archive Utility applies
+`com.apple.quarantine` to the binary, and Gatekeeper then refuses to run it and
+reports that it cannot be verified. Remove the attribute deliberately in that
+case, after you have verified the checksum above:
 
 ```sh
 xattr -d com.apple.quarantine /usr/local/bin/isolated-dev
 ```
 
-`curl` does not set that attribute, so a `curl`-downloaded archive needs no
-such step. [docs/releasing.md](docs/releasing.md) documents what signing and
-notarization would require, and why neither is silently worked around here.
+On the `tar` path that command exits non-zero with `No such xattr`, which means
+there was nothing to remove — not a failed install.
+[docs/releasing.md](docs/releasing.md) documents what signing and notarization
+would require, and why neither is silently worked around here.
 
 To build from source instead — which needs the Go toolchain, and only for the
 build:
