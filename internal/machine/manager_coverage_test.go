@@ -577,3 +577,141 @@ func TestDestroyHandlesCleanupFailures(t *testing.T) {
 		})
 	}
 }
+
+// Both Stop and Destroy inspect the machine list before mutating anything, so a
+// failed listing must surface instead of being read as "no machine exists".
+func TestStopAndDestroyReportMachineListingFailures(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		invoke func(Manager) error
+	}{
+		{
+			name: "stop",
+			invoke: func(manager Manager) error {
+				return manager.Stop(context.Background(), validTarget())
+			},
+		},
+		{
+			name: "destroy",
+			invoke: func(manager Manager) error {
+				return manager.Destroy(context.Background(), validTarget())
+			},
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			manager := Manager{
+				Runner: &runnerStub{responses: []response{
+					{err: errors.New("daemon unavailable")},
+				}},
+				StateStore: &stateStoreStub{},
+			}
+
+			err := test.invoke(manager)
+			if err == nil || !strings.Contains(err.Error(), "list machines") {
+				t.Fatalf("%s() error = %v, want a listing failure", test.name, err)
+			}
+		})
+	}
+}
+
+// A relative project path is rejected before any machine command runs, so a
+// mistyped target can never reach an unrelated machine.
+func TestStopRejectsRelativeProjectPath(t *testing.T) {
+	t.Parallel()
+
+	runner := &runnerStub{}
+	target := validTarget()
+	target.ProjectPath = "relative/app"
+
+	err := Manager{Runner: runner, StateStore: &stateStoreStub{}}.
+		Stop(context.Background(), target)
+	if err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("Stop() error = %v, want an absolute-path failure", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("calls = %+v, want no machine command", runner.calls)
+	}
+}
+
+// Destroying a project that was never brought up is a no-op rather than an
+// error: there is no machine and no state to remove.
+func TestDestroyIsSilentForAnUnknownUnownedMachine(t *testing.T) {
+	t.Parallel()
+
+	runner := &runnerStub{responses: []response{{output: []byte("[]")}}}
+	manager := Manager{
+		Runner:     runner,
+		StateStore: &stateStoreStub{loadErr: state.ErrNotFound},
+	}
+
+	if err := manager.Destroy(context.Background(), validTarget()); err != nil {
+		t.Fatalf("Destroy() error = %v, want no failure", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("calls = %+v, want only the machine listing", runner.calls)
+	}
+}
+
+// A failed creation must not leave project state pointing at a machine that
+// does not exist. When that cleanup itself fails, both failures are reported so
+// the recorded state is never silently wrong.
+func TestUpReportsReconciliationFailuresAfterAFailedCreate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		responses []response
+		store     *stateStoreStub
+		want      string
+	}{
+		{
+			name: "listing fails during reconciliation",
+			responses: []response{
+				{output: []byte("[]")},
+				{err: errors.New("create refused")},
+				{err: errors.New("daemon unavailable")},
+			},
+			store: &stateStoreStub{loadErr: state.ErrNotFound},
+			want:  "reconcile failed machine creation",
+		},
+		{
+			name: "state removal fails during reconciliation",
+			responses: []response{
+				{output: []byte("[]")},
+				{err: errors.New("create refused")},
+				{output: []byte("[]")},
+			},
+			store: &stateStoreStub{
+				loadErr:   state.ErrNotFound,
+				deleteErr: errors.New("state locked"),
+			},
+			want: "remove project state after failed machine creation",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			manager := Manager{
+				Runner:       &runnerStub{responses: test.responses},
+				StateStore:   test.store,
+				DockerWaiter: &dockerWaiterStub{},
+			}
+
+			_, err := manager.Up(context.Background(), validRequest())
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Up() error = %v, want containing %q", err, test.want)
+			}
+			if !strings.Contains(err.Error(), "create machine") {
+				t.Fatalf("Up() error = %v, want the original creation failure preserved", err)
+			}
+		})
+	}
+}

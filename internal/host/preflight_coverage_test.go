@@ -71,3 +71,24 @@ func TestCheckReportsPrerequisiteInspectionFailures(t *testing.T) {
 		})
 	}
 }
+
+// The default checker is what production wires up, so its command hooks must
+// actually execute rather than only being non-nil.
+func TestDefaultCheckerRunsRealCommands(t *testing.T) {
+	t.Parallel()
+
+	checker := DefaultChecker()
+	if checker.LookPath == nil || checker.Run == nil {
+		t.Fatalf("DefaultChecker() = %+v, want both hooks configured", checker)
+	}
+	if _, err := checker.LookPath("sh"); err != nil {
+		t.Fatalf("LookPath() error = %v", err)
+	}
+	output, err := checker.Run(context.Background(), "echo", "ready")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !strings.Contains(string(output), "ready") {
+		t.Fatalf("Run() output = %q, want the command output captured", output)
+	}
+}

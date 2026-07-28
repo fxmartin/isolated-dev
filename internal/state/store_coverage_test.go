@@ -108,3 +108,50 @@ func TestStoreDeleteReportsNonMissingRemoveError(t *testing.T) {
 		t.Fatalf("Delete() error = %v, must not report missing state", err)
 	}
 }
+
+// The atomic rename is the last step of a save. When the destination cannot be
+// replaced, the failure must surface and the temporary file must not be left
+// behind for a later load to pick up.
+func TestStoreSaveReportsReplacementFailure(t *testing.T) {
+	t.Parallel()
+
+	store := Store{Root: t.TempDir()}
+	machineName := "safe-machine"
+	// A non-empty directory at the destination cannot be replaced by a rename.
+	if err := os.Mkdir(store.path(machineName), 0o700); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(store.path(machineName), "blocker"),
+		[]byte("x"),
+		0o600,
+	); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	err := store.Save(Project{SchemaVersion: 1, MachineName: machineName})
+	if err == nil || !strings.Contains(err.Error(), "replace project state") {
+		t.Fatalf("Save() error = %v, want a replacement failure", err)
+	}
+
+	entries, err := os.ReadDir(store.Root)
+	if err != nil {
+		t.Fatalf("ReadDir() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("state directory entries = %d, want only the untouched destination", len(entries))
+	}
+}
+
+// Without a resolvable configuration directory there is nowhere to record
+// project state, and that must be reported rather than defaulting to the
+// working directory.
+func TestDefaultStoreReportsAnUnresolvableConfigurationDirectory(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+
+	if _, err := DefaultStore(); err == nil ||
+		!strings.Contains(err.Error(), "resolve user configuration directory") {
+		t.Fatalf("DefaultStore() error = %v, want a configuration directory failure", err)
+	}
+}

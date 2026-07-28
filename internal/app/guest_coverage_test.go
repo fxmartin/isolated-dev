@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/fxmartin/isolated-dev/internal/guest"
+	"github.com/fxmartin/isolated-dev/internal/project"
+	"github.com/fxmartin/isolated-dev/internal/state"
 )
 
 func TestUpReportsHomeDirectoryResolutionFailures(t *testing.T) {
@@ -115,5 +117,67 @@ func TestGuestIdentityFallsBackToTheInvokingUser(t *testing.T) {
 	}
 	if err == nil && got != want {
 		t.Fatalf("guestIdentity() = %+v, want %+v", got, want)
+	}
+}
+
+// The mounted project must be locatable inside the home mount. A home directory
+// that cannot be compared with the project path is reported before any machine
+// is created rather than mounting an unexpected tree.
+func TestUpReportsIncomparableHomeAndProjectPaths(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	repository := filepath.Join(home, "app")
+	if err := os.MkdirAll(filepath.Join(repository, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	lifecycle := &lifecycleStub{}
+	application := upApp(t, home, repository, lifecycle)
+	// A relative home directory survives symlink resolution and cannot be made
+	// relative to the absolute, canonical project path.
+	application.HomeDir = "."
+
+	err := application.Up(context.Background(), repository, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "compare project and home directories") {
+		t.Fatalf("Up() error = %v, want an incomparable-path failure", err)
+	}
+	if len(lifecycle.upRequests) != 0 {
+		t.Fatalf("up requests = %+v, want no lifecycle mutation", lifecycle.upRequests)
+	}
+}
+
+// `status` reports the guest identity straight from project state, so a state
+// record that cannot be written back must fail loudly instead of silently
+// dropping the provisioned identity and mounted-project path.
+func TestUpReportsGuestIdentityRecordingFailure(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	repository := filepath.Join(home, "app")
+	if err := os.MkdirAll(filepath.Join(repository, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	resolved, err := project.Resolve(repository)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	// The record loads cleanly but carries a machine name the store refuses to
+	// write back, which is the only way the save half of recording can fail.
+	stateRoot := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(stateRoot, resolved.MachineName+".json"),
+		[]byte(`{"schema_version":1,"machine_name":"../escape"}`),
+		0o600,
+	); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	application := upApp(t, home, repository, &lifecycleStub{})
+	application.StateStore = state.Store{Root: stateRoot}
+
+	err = application.Up(context.Background(), repository, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "record guest identity") {
+		t.Fatalf("Up() error = %v, want a guest identity recording failure", err)
 	}
 }

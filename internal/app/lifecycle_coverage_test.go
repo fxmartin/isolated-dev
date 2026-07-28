@@ -526,3 +526,46 @@ func TestImageVersion(t *testing.T) {
 		}
 	}
 }
+
+// Destroy is the most damaging command, so it runs the same resolve, host, and
+// configuration checks as the other mutating commands before touching anything.
+func TestDestroyReportsMutationBoundaryFailures(t *testing.T) {
+	t.Parallel()
+
+	repository := appRepository(t)
+	tests := []struct {
+		name        string
+		path        string
+		application App
+		want        string
+	}{
+		{
+			name: "resolve",
+			path: "",
+			want: "project path",
+		},
+		{
+			name:        "host",
+			path:        repository,
+			application: App{HostChecker: failingHostChecker()},
+			want:        "not configured",
+		},
+		{
+			name:        "manager missing",
+			path:        repository,
+			application: App{HostChecker: passingHostChecker()},
+			want:        "lifecycle is not configured",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := test.application.Destroy(context.Background(), test.path)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Destroy() error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
