@@ -60,6 +60,29 @@ func TestApplyReportsHostSideFailures(t *testing.T) {
 			},
 			want: "write SSH configuration",
 		},
+		// A dotfiles setup can link the managed file somewhere else. The write
+		// follows that link, so a destination it cannot create must be reported
+		// against the managed file rather than silently replacing the link.
+		"managed configuration is linked somewhere unwritable": {
+			arrange: func(t *testing.T, manager Manager) {
+				t.Helper()
+				if err := os.MkdirAll(manager.managedDir(), 0o700); err != nil {
+					t.Fatalf("MkdirAll() error = %v", err)
+				}
+				readOnly := filepath.Join(t.TempDir(), "read-only")
+				if err := os.Mkdir(readOnly, 0o500); err != nil {
+					t.Fatalf("Mkdir() error = %v", err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(readOnly, 0o700) })
+				if err := os.Symlink(
+					filepath.Join(readOnly, "dotfiles", "config"),
+					manager.ManagedConfigPath(),
+				); err != nil {
+					t.Fatalf("Symlink() error = %v", err)
+				}
+			},
+			want: "write managed SSH configuration",
+		},
 	}
 	for name, testCase := range cases {
 		t.Run(name, func(t *testing.T) {

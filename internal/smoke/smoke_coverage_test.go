@@ -3,12 +3,14 @@ package smoke
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"text/template"
 	"time"
 )
 
@@ -760,9 +762,75 @@ func TestFixtureRemoveIgnoresAnUnsetDirectory(t *testing.T) {
 	}
 }
 
+// A body that fails partway through must be reported rather than returned as a
+// shorter marker: a truncated read of the marker file would otherwise look like
+// a mismatch in the workload instead of a failed transfer.
+func TestHTTPProberReportsABodyItCannotRead(t *testing.T) {
+	t.Parallel()
+
+	prober := HTTPProber{Client: &http.Client{
+		Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(failingReader{}),
+				Request:    request,
+			}, nil
+		}),
+	}}
+
+	if _, err := prober.Get(context.Background(), "http://baseline.invalid/"+MarkerFileName); err == nil ||
+		!strings.Contains(err.Error(), "read ") {
+		t.Fatalf("Get() error = %v, want the unreadable body reported", err)
+	}
+}
+
+// WriteFixture renders two files. A template failure in either one has to stop
+// the run, because a half-written fixture directory would send Compose a file
+// that does not describe the baseline.
+func TestWriteFixtureReportsATemplateItCannotRender(t *testing.T) {
+	// Not parallel: the package templates are swapped for the duration.
+	broken := template.Must(template.New("broken").Parse(`{{.NoSuchField}}`))
+
+	cases := []struct {
+		name    string
+		replace func(*template.Template)
+	}{
+		{name: ComposeFileName, replace: func(tmpl *template.Template) { composeTemplate = tmpl }},
+		{name: NginxFileName, replace: func(tmpl *template.Template) { nginxTemplate = tmpl }},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			originalCompose, originalNginx := composeTemplate, nginxTemplate
+			t.Cleanup(func() { composeTemplate, nginxTemplate = originalCompose, originalNginx })
+			testCase.replace(broken)
+
+			dir := filepath.Join(t.TempDir(), "baseline")
+			if _, err := WriteFixture(dir, "baseline", "marker", 18080); err == nil ||
+				!strings.Contains(err.Error(), "render baseline fixture broken") {
+				t.Fatalf("WriteFixture() error = %v, want the template failure reported", err)
+			}
+		})
+	}
+}
+
 // proberFunc adapts a function to Prober for the retry tests.
 type proberFunc func(context.Context, string) (string, error)
 
 func (probe proberFunc) Get(ctx context.Context, url string) (string, error) {
 	return probe(ctx, url)
+}
+
+// roundTripperFunc adapts a function to http.RoundTripper, so a response can be
+// shaped without a server on the other end of it.
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (trip roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return trip(request)
+}
+
+// failingReader is a body that never yields the marker.
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) {
+	return 0, errors.New("connection reset by peer")
 }

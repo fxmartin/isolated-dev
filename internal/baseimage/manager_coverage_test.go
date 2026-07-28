@@ -3,6 +3,8 @@ package baseimage
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -192,6 +194,29 @@ func TestEnsureReferenceRejectsAnUnsafeManagedVersion(t *testing.T) {
 	err := manager.EnsureReference(context.Background(), "local/isolated-dev-base:../escape")
 	if err == nil || !strings.Contains(err.Error(), "invalid base-image version") {
 		t.Fatalf("EnsureReference() error = %v, want an invalid version failure", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("calls = %+v, want no build command", runner.calls)
+	}
+}
+
+// The embedded assets are unpacked into a temporary build context. Without a
+// usable one there is nothing to build from, and that must be reported instead
+// of handing the builder an empty directory.
+func TestEnsureReferenceReportsAnUnusableTemporaryContext(t *testing.T) {
+	// Not parallel: TMPDIR is process-wide.
+	notADirectory := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(notADirectory, []byte("x"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Setenv("TMPDIR", notADirectory)
+
+	runner := &fakeRunner{}
+	manager := Manager{Runner: runner}
+
+	err := manager.EnsureReference(context.Background(), "local/isolated-dev-base:"+DefaultVersion)
+	if err == nil || !strings.Contains(err.Error(), "create temporary base-image context") {
+		t.Fatalf("EnsureReference() error = %v, want a temporary context failure", err)
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("calls = %+v, want no build command", runner.calls)
