@@ -458,6 +458,58 @@ ISOLATED_DEV_RUN_HOST_TESTS=1 go test ./internal/smoke \
   -run TestHostRunsTheBaselineNestedComposeWorkload -count=1 -v -timeout 40m
 ```
 
+The Forge DEV acceptance run is the MVP's upper-bound workload. It needs the
+`../forge` repository to declare its DEV command and its two forwarded ports in
+its own `.isolated-dev.toml`:
+
+```toml
+[[ports]]
+name = "frontend"
+guest = 3001
+host = 3001
+
+[[ports]]
+name = "backend"
+guest = 8001
+host = 8001
+
+[commands.dev]
+args = ["docker", "compose", "--profile", "dev", "up", "-d"]
+compose = true
+```
+
+The declared command must be exactly that argument vector, with no added
+`--file` and no `workdir`, so what starts is the repository's own Compose file
+and nothing else; the run digests that file before and after, which makes
+"unmodified" checked rather than assumed. It reconciles the project machine with
+`up`, invokes the declared command through the same path as `isolated-dev run`,
+waits for PostgreSQL 16, the FastAPI backend, the Python worker, and the
+React/Vite-to-Nginx frontend to be running and healthy, and then reads the
+frontend at `http://127.0.0.1:3001/` and the backend health endpoint at
+`http://127.0.0.1:8001/health` from macOS through the managed tunnel.
+
+Unlike the baseline test it creates nothing and removes nothing: Forge is a real
+repository with real named volumes, and its DEV stack is meant to keep running
+afterwards. A failure captures the machine list, `docker info`, and the Compose
+state and logs, and when that output shows an architecture incompatibility the
+result names the affected image or build step and whether `linux/amd64` image
+selection, Rosetta, or a binfmt handler is what the guest is missing:
+
+```
+architecture incompatibility: image postgres:16-alpine; linux/amd64 support is
+required: the image is published without a linux/arm64 variant, so it can only
+run as linux/amd64, which needs Rosetta or a binfmt handler registered inside
+the machine
+```
+
+Set `ISOLATED_DEV_FORGE_PATH` when the repository is not at `../forge`. The
+first run builds the Forge images inside the machine, so allow for it:
+
+```sh
+ISOLATED_DEV_RUN_HOST_TESTS=1 go test ./internal/forge \
+  -run TestHostRunsTheUnmodifiedForgeDevStack -count=1 -v -timeout 70m
+```
+
 The Zed check is not destructive and needs no machine. It resolves the real
 `zed` CLI the way `open` does, confirms the installed build is invocable, and
 verifies the `ssh://` target decodes back to exactly the managed alias and guest
