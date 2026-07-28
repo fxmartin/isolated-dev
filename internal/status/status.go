@@ -14,13 +14,16 @@ type Snapshot struct {
 	MachineName      string
 	MachineStatus    string
 	BaseImage        string
-	MountScope       string
-	TunnelStatus     string
-	GuestUser        string
-	GuestUID         int
-	GuestGID         int
-	GuestProjectPath string
-	Config           config.Config
+	// AvailableBaseImage is the image the effective configuration selects. It
+	// is empty unless a created machine is pinned to a different one.
+	AvailableBaseImage string
+	MountScope         string
+	TunnelStatus       string
+	GuestUser          string
+	GuestUID           int
+	GuestGID           int
+	GuestProjectPath   string
+	Config             config.Config
 }
 
 const notProvisioned = "not-provisioned"
@@ -30,6 +33,20 @@ func guestUser(snapshot Snapshot) string {
 		return notProvisioned
 	}
 	return fmt.Sprintf("%s (%d:%d)", snapshot.GuestUser, snapshot.GuestUID, snapshot.GuestGID)
+}
+
+// baseImage reports the image the machine is pinned to. A newer configured
+// image is only announced: `status` never implies that a machine has moved to
+// an image it was not created from.
+func baseImage(snapshot Snapshot) string {
+	if snapshot.AvailableBaseImage == "" || snapshot.AvailableBaseImage == snapshot.BaseImage {
+		return snapshot.BaseImage
+	}
+	return fmt.Sprintf(
+		"%s (pinned; %s available, run upgrade)",
+		snapshot.BaseImage,
+		snapshot.AvailableBaseImage,
+	)
 }
 
 func orNotProvisioned(value string) string {
@@ -45,7 +62,7 @@ func Write(writer io.Writer, snapshot Snapshot) error {
 		"Apple Container: " + snapshot.ContainerVersion,
 		"Project: " + snapshot.ProjectPath,
 		fmt.Sprintf("Machine: %s (%s)", snapshot.MachineName, snapshot.MachineStatus),
-		"Base image: " + snapshot.BaseImage,
+		"Base image: " + baseImage(snapshot),
 		"Mount scope: " + snapshot.MountScope,
 		"Tunnel: " + snapshot.TunnelStatus,
 		"Guest user: " + guestUser(snapshot),

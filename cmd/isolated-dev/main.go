@@ -53,5 +53,8 @@ func main() {
 		Destroy: func(path string) error {
 			return application.Destroy(context.Background(), path)
 		},
+		Upgrade: func(path string, confirmed bool) error {
+			return application.Upgrade(context.Background(), path, confirmed, os.Stdout)
+		},
 	}))
 }
