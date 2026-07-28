@@ -35,8 +35,11 @@ type App struct {
 	StateStore       state.Store
 	MachineManager   MachineManager
 	GuestProvisioner GuestProvisioner
-	HomeDir          string
-	WarningOutput    io.Writer
+	// ImageEnsurer builds the target base image before `upgrade` destroys the
+	// machine it is replacing.
+	ImageEnsurer  ImageEnsurer
+	HomeDir       string
+	WarningOutput io.Writer
 	// ResolveIdentity defaults to the invoking macOS user.
 	ResolveIdentity func() (guest.Identity, error)
 }

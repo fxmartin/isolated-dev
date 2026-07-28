@@ -11,6 +11,12 @@ import (
 	upgradeview "github.com/fxmartin/isolated-dev/internal/upgrade"
 )
 
+// ImageEnsurer makes a managed base image present on the host, building it when
+// it is missing.
+type ImageEnsurer interface {
+	EnsureReference(context.Context, string) error
+}
+
 // Upgrade moves a project machine onto the base image its configuration
 // selects. A machine is never migrated implicitly: an upgrade recreates it,
 // which discards every byte of guest-only state, so the caller must have seen
@@ -23,7 +29,8 @@ func (app App) Upgrade(
 ) error {
 	// Preparing the recreation up front keeps a rejected repository, unmanaged
 	// image, or missing SSH key from surfacing only after the machine — and the
-	// data that lives nowhere else — has already been deleted.
+	// data that lives nowhere else — has already been deleted. The target image
+	// itself is built further down, once the upgrade is confirmed.
 	preparation, err := app.prepareUp(ctx, projectPath)
 	if err != nil {
 		return err
@@ -75,6 +82,24 @@ func (app App) Upgrade(
 			return fmt.Errorf("write upgrade guidance: %w", err)
 		}
 		return nil
+	}
+
+	// Building the target image is the last precondition that can fail, and the
+	// only one `prepareUp` cannot cover: the image may simply not exist yet.
+	// Building it while the machine still holds the guest-only data keeps an
+	// offline host, a moved upstream tag, or a broken Dockerfile from destroying
+	// a machine that nothing can replace. EnsureReference is idempotent, so the
+	// recreation below re-checks it with a bare inspect.
+	if app.ImageEnsurer == nil {
+		return errors.New("base-image builder is not configured")
+	}
+	if err := app.ImageEnsurer.EnsureReference(ctx, target); err != nil {
+		return fmt.Errorf(
+			"prepare base image %s before recreating %q; the machine is untouched: %w",
+			target,
+			resolved.MachineName,
+			err,
+		)
 	}
 
 	if err := app.MachineManager.Destroy(ctx, machine.Target{

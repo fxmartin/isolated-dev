@@ -218,6 +218,37 @@ func TestUpgradeRejectsAnUnknownConfirmationFlag(t *testing.T) {
 	}
 }
 
+// A forgotten project path must not be read as a project literally named
+// "--yes", which would surface as an unrelated path-resolution failure.
+func TestUpgradeRejectsAConfirmationWithoutAProjectPath(t *testing.T) {
+	t.Parallel()
+
+	var stderr bytes.Buffer
+	invoked := false
+	mutated := false
+	exitCode := Run([]string{"upgrade", "--yes"}, Dependencies{
+		Stdout: &bytes.Buffer{},
+		Stderr: &stderr,
+		Upgrade: func(string, bool) error {
+			invoked = true
+			return nil
+		},
+		OnMutate: func() {
+			mutated = true
+		},
+	})
+
+	if exitCode != 2 {
+		t.Fatalf("Run() exit code = %d, want 2", exitCode)
+	}
+	if invoked || mutated {
+		t.Fatalf("upgrade ran without a project path: invoked = %t, mutated = %t", invoked, mutated)
+	}
+	if !bytes.Contains(stderr.Bytes(), []byte("pass the project path")) {
+		t.Errorf("stderr = %q, want guidance about the missing project path", stderr.String())
+	}
+}
+
 func TestUpgradeReportsAnUnavailableCommand(t *testing.T) {
 	t.Parallel()
 

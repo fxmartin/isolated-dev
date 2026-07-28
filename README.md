@@ -200,8 +200,10 @@ isolated-dev upgrade --yes /path/to/repository
 
 Every precondition that `up` enforces — a managed base image, a repository
 inside the home mount, a resolvable guest identity, and a usable public key —
-is checked before the existing machine is destroyed, so a rejected upgrade
-never leaves you without a machine. The replacement is created through the
+is checked before the existing machine is destroyed, and the target base image
+is built first as well, so an offline host or a broken image build fails while
+the machine and its guest-only data are still intact. A rejected upgrade never
+leaves you without a machine. The replacement is created through the
 ordinary `up` path, so mount, identity, SSH, and tunnel reconciliation behave
 exactly as they do for any other machine. If the configured image already
 matches the pinned one, `upgrade` reports that and does nothing, even with

@@ -33,6 +33,12 @@ func Run(args []string, deps Dependencies) int {
 	if len(args) == 2 && args[0] == "stop" {
 		return runCommand("stop", args[1], deps.Stop, deps, true)
 	}
+	// `upgrade --yes` alone is a forgotten project path, not a preview of a
+	// project named "--yes": naming the real mistake beats a resolve failure.
+	if len(args) == 2 && args[0] == "upgrade" && args[1] == "--yes" {
+		fmt.Fprintln(deps.Stderr, "upgrade: pass the project path, as in `isolated-dev upgrade --yes PROJECT`")
+		return 2
+	}
 	// A bare `upgrade` is the preview: it reports what a recreation would
 	// discard and changes nothing.
 	if len(args) == 2 && args[0] == "upgrade" {

@@ -14,8 +14,10 @@ type Snapshot struct {
 	MachineName      string
 	MachineStatus    string
 	BaseImage        string
-	// AvailableBaseImage is the image the effective configuration selects. It
-	// is empty unless a created machine is pinned to a different one.
+	// AvailableBaseImage is the image the effective configuration selects for a
+	// recorded machine; it is empty only when no machine has been created. It
+	// routinely equals BaseImage, so an upgrade is available only when the two
+	// differ.
 	AvailableBaseImage string
 	MountScope         string
 	TunnelStatus       string

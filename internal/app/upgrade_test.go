@@ -54,6 +54,23 @@ func (lifecycle *stateBackedLifecycle) Destroy(
 	return lifecycle.store.Delete(target.MachineName)
 }
 
+// imageStub records the references an upgrade prepares, and can fail the way a
+// missing network or a broken Dockerfile does.
+type imageStub struct {
+	ensured []string
+	err     error
+	// onEnsure observes the machine state at the moment the image is prepared.
+	onEnsure func()
+}
+
+func (stub *imageStub) EnsureReference(_ context.Context, reference string) error {
+	stub.ensured = append(stub.ensured, reference)
+	if stub.onEnsure != nil {
+		stub.onEnsure()
+	}
+	return stub.err
+}
+
 // upgradeApp seeds a machine pinned to the default base image and points the
 // project configuration at the requested target, which is the only situation
 // in which an upgrade is available.
@@ -75,6 +92,7 @@ func upgradeApp(t *testing.T, targetImage string) (App, *stateBackedLifecycle, s
 	application := upApp(t, home, repository, nil)
 	lifecycle := &stateBackedLifecycle{store: application.StateStore}
 	application.MachineManager = lifecycle
+	application.ImageEnsurer = &imageStub{}
 	application.WarningOutput = io.Discard
 	return application, lifecycle, repository
 }
@@ -195,6 +213,101 @@ func TestUpgradeValidatesEveryUpPreconditionBeforeDestroying(t *testing.T) {
 	}
 	if len(lifecycle.destroyed) != 0 {
 		t.Fatalf("destroyed = %#v, want no destruction before validation passes", lifecycle.destroyed)
+	}
+}
+
+// The target image is the one precondition `up` cannot check ahead of time, and
+// it is also the one most likely to fail: it may never have been built. A
+// failure to produce it must leave the machine — and the guest-only data it
+// holds — exactly where it was.
+func TestUpgradeBuildsTheTargetImageBeforeDestroying(t *testing.T) {
+	t.Parallel()
+
+	application, lifecycle, repository := upgradeApp(t, "local/isolated-dev-base:2")
+	destroyedWhenEnsured := -1
+	images := &imageStub{
+		onEnsure: func() { destroyedWhenEnsured = len(lifecycle.destroyed) },
+	}
+	application.ImageEnsurer = images
+
+	if err := application.Upgrade(context.Background(), repository, true, io.Discard); err != nil {
+		t.Fatalf("Upgrade() error = %v", err)
+	}
+
+	if len(images.ensured) != 1 || images.ensured[0] != "local/isolated-dev-base:2" {
+		t.Fatalf("ensured = %#v, want the target image prepared once", images.ensured)
+	}
+	if destroyedWhenEnsured != 0 {
+		t.Errorf("machine destroyed %d time(s) before the image was prepared, want 0",
+			destroyedWhenEnsured)
+	}
+}
+
+func TestUpgradeKeepsTheMachineWhenTheTargetImageCannotBeBuilt(t *testing.T) {
+	t.Parallel()
+
+	application, lifecycle, repository := upgradeApp(t, "local/isolated-dev-base:2")
+	application.ImageEnsurer = &imageStub{err: errors.New("no network")}
+	resolved, err := project.Resolve(repository)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	before, err := application.StateStore.Load(resolved.MachineName)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	err = application.Upgrade(context.Background(), repository, true, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "no network") {
+		t.Fatalf("Upgrade() error = %v, want the image failure reported", err)
+	}
+	if !strings.Contains(err.Error(), "the machine is untouched") {
+		t.Errorf("Upgrade() error = %v, want it to say the machine survived", err)
+	}
+	if len(lifecycle.destroyed) != 0 || len(lifecycle.upRequests) != 0 {
+		t.Fatalf("machine mutated after a failed image build: destroyed = %#v, up = %#v",
+			lifecycle.destroyed, lifecycle.upRequests)
+	}
+	after, err := application.StateStore.Load(resolved.MachineName)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if after != before {
+		t.Fatalf("state = %+v, want %+v unchanged", after, before)
+	}
+}
+
+// The pre-flight build is what makes the recreation survivable, so an
+// unconfigured builder must fail rather than silently skip it.
+func TestUpgradeRefusesWithoutAConfiguredImageBuilder(t *testing.T) {
+	t.Parallel()
+
+	application, lifecycle, repository := upgradeApp(t, "local/isolated-dev-base:2")
+	application.ImageEnsurer = nil
+
+	err := application.Upgrade(context.Background(), repository, true, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "base-image builder is not configured") {
+		t.Fatalf("Upgrade() error = %v, want an unconfigured-builder refusal", err)
+	}
+	if len(lifecycle.destroyed) != 0 {
+		t.Fatalf("destroyed = %#v, want no destruction", lifecycle.destroyed)
+	}
+}
+
+// A preview changes nothing, and building an image is a change: it downloads,
+// writes layers, and can take minutes.
+func TestUpgradePreviewDoesNotBuildTheTargetImage(t *testing.T) {
+	t.Parallel()
+
+	application, _, repository := upgradeApp(t, "local/isolated-dev-base:2")
+	images := &imageStub{}
+	application.ImageEnsurer = images
+
+	if err := application.Upgrade(context.Background(), repository, false, io.Discard); err != nil {
+		t.Fatalf("Upgrade() error = %v", err)
+	}
+	if len(images.ensured) != 0 {
+		t.Fatalf("ensured = %#v, want a preview to build nothing", images.ensured)
 	}
 }
 

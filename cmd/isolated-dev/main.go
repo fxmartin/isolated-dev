@@ -35,6 +35,7 @@ func main() {
 		StateStore:       store,
 		MachineManager:   machineManager,
 		GuestProvisioner: guest.Provisioner{Runner: runner},
+		ImageEnsurer:     imageManager,
 		WarningOutput:    os.Stderr,
 	}
 	os.Exit(cli.Run(os.Args[1:], cli.Dependencies{
