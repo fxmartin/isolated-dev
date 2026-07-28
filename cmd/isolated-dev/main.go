@@ -11,6 +11,7 @@ import (
 	"github.com/fxmartin/isolated-dev/internal/guest"
 	"github.com/fxmartin/isolated-dev/internal/host"
 	"github.com/fxmartin/isolated-dev/internal/machine"
+	"github.com/fxmartin/isolated-dev/internal/projectcmd"
 	"github.com/fxmartin/isolated-dev/internal/sshconfig"
 	"github.com/fxmartin/isolated-dev/internal/state"
 	"github.com/fxmartin/isolated-dev/internal/zed"
@@ -47,7 +48,11 @@ func main() {
 		AddressResolver:  machineManager,
 		SSHConfig:        sshconfig.Manager{SSHDir: filepath.Join(homeDir, ".ssh")},
 		Zed:              zed.Launcher{Runner: runner},
-		WarningOutput:    os.Stderr,
+		ProjectCommands: projectcmd.Executor{
+			Runner:       projectcmd.ExecRunner{},
+			DockerWaiter: imageManager,
+		},
+		WarningOutput: os.Stderr,
 	}
 	os.Exit(cli.Run(os.Args[1:], cli.Dependencies{
 		Stdout:  os.Stdout,
@@ -70,6 +75,13 @@ func main() {
 		},
 		Upgrade: func(path string, confirmed bool) error {
 			return application.Upgrade(context.Background(), path, confirmed, os.Stdout)
+		},
+		Run: func(path string, name string) (int, error) {
+			return application.Run(context.Background(), path, name, projectcmd.Streams{
+				Stdin:  os.Stdin,
+				Stdout: os.Stdout,
+				Stderr: os.Stderr,
+			})
 		},
 	}))
 }

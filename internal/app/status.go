@@ -61,6 +61,9 @@ type App struct {
 	AddressResolver AddressResolver
 	SSHConfig       SSHConfigurator
 	Zed             ZedLauncher
+	// ProjectCommands executes explicitly declared project commands. It is used
+	// only by `run`: no lifecycle command ever reaches for it.
+	ProjectCommands ProjectCommandRunner
 	HomeDir         string
 	WarningOutput   io.Writer
 	// ResolveIdentity defaults to the invoking macOS user.
