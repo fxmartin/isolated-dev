@@ -3,7 +3,9 @@ package project
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode"
 )
 
 func TestResolveCanonicalizesPathAndBuildsStableMachineName(t *testing.T) {
@@ -37,6 +39,12 @@ func TestResolveCanonicalizesPathAndBuildsStableMachineName(t *testing.T) {
 	if got, wantPrefix := fromRealPath.MachineName, "isolated-dev-my-web-app-"; len(got) <= len(wantPrefix) || got[:len(wantPrefix)] != wantPrefix {
 		t.Errorf("MachineName = %q, want prefix %q and hash", got, wantPrefix)
 	}
+	if suffix := strings.TrimPrefix(
+		fromRealPath.MachineName,
+		"isolated-dev-my-web-app-",
+	); len(suffix) != 16 {
+		t.Errorf("MachineName hash = %q, want 16 hexadecimal characters", suffix)
+	}
 }
 
 func TestResolveAvoidsSameBasenameCollision(t *testing.T) {
@@ -57,6 +65,25 @@ func TestResolveAvoidsSameBasenameCollision(t *testing.T) {
 
 	if firstProject.MachineName == secondProject.MachineName {
 		t.Fatalf("MachineName collision = %q", firstProject.MachineName)
+	}
+}
+
+func TestResolveBuildsASCIISafeMachineNameFromUnicodeRepository(t *testing.T) {
+	t.Parallel()
+
+	repository := makeRepository(t, filepath.Join(t.TempDir(), "café-日本語"))
+
+	resolved, err := Resolve(repository)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if got, wantPrefix := resolved.MachineName, "isolated-dev-caf-"; !strings.HasPrefix(got, wantPrefix) {
+		t.Fatalf("MachineName = %q, want prefix %q", got, wantPrefix)
+	}
+	for _, character := range resolved.MachineName {
+		if character > unicode.MaxASCII {
+			t.Fatalf("MachineName = %q, contains non-ASCII character %q", resolved.MachineName, character)
+		}
 	}
 }
 

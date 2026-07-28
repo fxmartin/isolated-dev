@@ -5,18 +5,32 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 
+	"github.com/fxmartin/isolated-dev/internal/baseimage"
 	"github.com/fxmartin/isolated-dev/internal/config"
 	"github.com/fxmartin/isolated-dev/internal/host"
+	"github.com/fxmartin/isolated-dev/internal/machine"
 	"github.com/fxmartin/isolated-dev/internal/project"
 	"github.com/fxmartin/isolated-dev/internal/state"
 	statusview "github.com/fxmartin/isolated-dev/internal/status"
 )
 
+type MachineManager interface {
+	Up(context.Context, machine.Request) (machine.UpResult, error)
+	Stop(context.Context, machine.Target) error
+	Destroy(context.Context, machine.Target) error
+}
+
 type App struct {
-	Version     string
-	HostChecker host.Checker
-	StateStore  state.Store
+	Version        string
+	HostChecker    host.Checker
+	StateStore     state.Store
+	MachineManager MachineManager
+	HomeDir        string
+	WarningOutput  io.Writer
 }
 
 func (app App) Status(ctx context.Context, projectPath string, output io.Writer) error {
@@ -50,9 +64,139 @@ func (app App) Status(ctx context.Context, projectPath string, output io.Writer)
 		snapshot.BaseImage = stored.BaseImage
 		snapshot.MountScope = stored.MountScope
 		snapshot.TunnelStatus = "unknown"
+		snapshot.Config.Resources.CPUs = stored.CPUs
+		snapshot.Config.Resources.MemoryGB = stored.MemoryGB
 	} else if !errors.Is(err, state.ErrNotFound) {
 		return fmt.Errorf("load project state: %w", err)
 	}
 
 	return statusview.Write(output, snapshot)
+}
+
+func (app App) Up(ctx context.Context, projectPath string, output io.Writer) error {
+	resolved, err := project.Resolve(projectPath)
+	if err != nil {
+		return err
+	}
+	effectiveConfig, err := config.Load(resolved.Path)
+	if err != nil {
+		return err
+	}
+	if _, err := app.HostChecker.Check(ctx); err != nil {
+		return err
+	}
+	if app.MachineManager == nil {
+		return errors.New("machine lifecycle is not configured")
+	}
+	if !baseimage.IsManagedReference(effectiveConfig.BaseImage) {
+		return fmt.Errorf(
+			"base image %q is not a managed isolated-dev image; refusing to grant it read-write access to the full home directory",
+			effectiveConfig.BaseImage,
+		)
+	}
+	if err := app.validateHomeMountedProject(resolved.Path); err != nil {
+		return err
+	}
+	if app.WarningOutput != nil {
+		if _, err := fmt.Fprintln(
+			app.WarningOutput,
+			"warning: this machine receives read-write access to your full home directory",
+		); err != nil {
+			return fmt.Errorf("write full-home mount warning: %w", err)
+		}
+	}
+	result, err := app.MachineManager.Up(ctx, machine.Request{
+		ProjectPath:      resolved.Path,
+		MachineName:      resolved.MachineName,
+		BaseImage:        effectiveConfig.BaseImage,
+		BaseImageVersion: imageVersion(effectiveConfig.BaseImage),
+		CPUs:             effectiveConfig.Resources.CPUs,
+		MemoryGB:         effectiveConfig.Resources.MemoryGB,
+		MountScope:       "home",
+	})
+	if err != nil {
+		return err
+	}
+	outcome := "ready"
+	if result.Created {
+		outcome = "created"
+	}
+	if _, err := fmt.Fprintf(output, "%s %s\n", outcome, resolved.Path); err != nil {
+		return fmt.Errorf("write up summary: %w", err)
+	}
+	return nil
+}
+
+func (app App) validateHomeMountedProject(projectPath string) error {
+	homeDir := app.HomeDir
+	if homeDir == "" {
+		var err error
+		homeDir, err = os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("resolve home directory: %w", err)
+		}
+	}
+	canonicalHome, err := filepath.EvalSymlinks(homeDir)
+	if err != nil {
+		return fmt.Errorf("resolve home directory %q: %w", homeDir, err)
+	}
+	relative, err := filepath.Rel(canonicalHome, projectPath)
+	if err != nil {
+		return fmt.Errorf("compare project and home directories: %w", err)
+	}
+	if relative == ".." ||
+		strings.HasPrefix(relative, ".."+string(filepath.Separator)) ||
+		filepath.IsAbs(relative) {
+		return fmt.Errorf(
+			"project %q is outside the mounted home directory %q; Apple Container Machine 1.1.0 cannot expose it, so move the repository under your home directory before running up",
+			projectPath,
+			canonicalHome,
+		)
+	}
+	return nil
+}
+
+func (app App) Stop(ctx context.Context, projectPath string) error {
+	resolved, err := app.resolveForMutation(ctx, projectPath)
+	if err != nil {
+		return err
+	}
+	return app.MachineManager.Stop(ctx, machine.Target{
+		ProjectPath: resolved.Path,
+		MachineName: resolved.MachineName,
+	})
+}
+
+func (app App) Destroy(ctx context.Context, projectPath string) error {
+	resolved, err := app.resolveForMutation(ctx, projectPath)
+	if err != nil {
+		return err
+	}
+	return app.MachineManager.Destroy(ctx, machine.Target{
+		ProjectPath: resolved.Path,
+		MachineName: resolved.MachineName,
+	})
+}
+
+func (app App) resolveForMutation(ctx context.Context, projectPath string) (project.Project, error) {
+	resolved, err := project.Resolve(projectPath)
+	if err != nil {
+		return project.Project{}, err
+	}
+	if _, err := app.HostChecker.Check(ctx); err != nil {
+		return project.Project{}, err
+	}
+	if app.MachineManager == nil {
+		return project.Project{}, errors.New("machine lifecycle is not configured")
+	}
+	return resolved, nil
+}
+
+func imageVersion(reference string) string {
+	lastSlash := strings.LastIndexByte(reference, '/')
+	lastColon := strings.LastIndexByte(reference, ':')
+	if lastColon > lastSlash && lastColon+1 < len(reference) {
+		return reference[lastColon+1:]
+	}
+	return reference
 }

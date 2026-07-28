@@ -33,7 +33,6 @@ type Config struct {
 type Resources struct {
 	CPUs     int `toml:"cpus"`
 	MemoryGB int `toml:"memory_gb"`
-	DiskGB   int `toml:"disk_gb"`
 }
 
 type Port struct {
@@ -61,7 +60,6 @@ type localConfig struct {
 type localResources struct {
 	CPUs     *int `toml:"cpus"`
 	MemoryGB *int `toml:"memory_gb"`
-	DiskGB   *int `toml:"disk_gb"`
 }
 
 type localPort struct {
@@ -77,7 +75,6 @@ func Defaults() Config {
 		Resources: Resources{
 			CPUs:     4,
 			MemoryGB: 8,
-			DiskGB:   64,
 		},
 		Commands: make(map[string]Command),
 	}
@@ -146,10 +143,6 @@ func mergeLocal(cfg *Config, local localConfig) error {
 	if local.Resources.MemoryGB != nil {
 		cfg.Resources.MemoryGB = *local.Resources.MemoryGB
 	}
-	if local.Resources.DiskGB != nil {
-		cfg.Resources.DiskGB = *local.Resources.DiskGB
-	}
-
 	portsByName := make(map[string]int, len(cfg.Ports))
 	for index, port := range cfg.Ports {
 		portsByName[port.Name] = index
@@ -180,10 +173,6 @@ func validate(cfg Config) error {
 	if cfg.Resources.MemoryGB <= 0 {
 		return errors.New("resources.memory_gb: must be positive")
 	}
-	if cfg.Resources.DiskGB <= 0 {
-		return errors.New("resources.disk_gb: must be positive")
-	}
-
 	names := make(map[string]struct{}, len(cfg.Ports))
 	for index, port := range cfg.Ports {
 		field := fmt.Sprintf("ports[%d]", index)

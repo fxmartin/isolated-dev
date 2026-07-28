@@ -21,7 +21,7 @@ func TestLoadReturnsDefaultsWithoutConfigurationFiles(t *testing.T) {
 	if got.MountTarget != DefaultMountTarget {
 		t.Errorf("MountTarget = %q, want %q", got.MountTarget, DefaultMountTarget)
 	}
-	if got.Resources.CPUs <= 0 || got.Resources.MemoryGB <= 0 || got.Resources.DiskGB <= 0 {
+	if got.Resources.CPUs <= 0 || got.Resources.MemoryGB <= 0 {
 		t.Errorf("Resources = %+v, want positive defaults", got.Resources)
 	}
 }
@@ -39,7 +39,6 @@ packages = ["nodejs"]
 [resources]
 cpus = 4
 memory_gb = 8
-disk_gb = 64
 
 [[ports]]
 name = "web"
@@ -64,11 +63,26 @@ host = 3100
 	if got.BaseImage != "example/base:v2" {
 		t.Errorf("BaseImage = %q, want shared value", got.BaseImage)
 	}
-	if got.Resources.CPUs != 6 || got.Resources.MemoryGB != 12 || got.Resources.DiskGB != 64 {
+	if got.Resources.CPUs != 6 || got.Resources.MemoryGB != 12 {
 		t.Errorf("Resources = %+v, want merged values", got.Resources)
 	}
 	if len(got.Ports) != 1 || got.Ports[0].Host != 3100 || got.Ports[0].Guest != 3000 {
 		t.Errorf("Ports = %+v, want local host override and shared guest port", got.Ports)
+	}
+}
+
+func TestLoadRejectsUnsupportedDiskConfiguration(t *testing.T) {
+	t.Parallel()
+
+	projectDir := t.TempDir()
+	writeTestFile(t, filepath.Join(projectDir, SharedFileName), `
+[resources]
+disk_gb = 64
+`)
+
+	_, err := Load(projectDir)
+	if err == nil || !strings.Contains(err.Error(), "resources.disk_gb") {
+		t.Fatalf("Load() error = %v, want unsupported disk field", err)
 	}
 }
 

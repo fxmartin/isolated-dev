@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode"
 )
 
 type Project struct {
@@ -49,14 +48,15 @@ func Resolve(path string) (Project, error) {
 func machineName(path string) string {
 	slug := slugify(filepath.Base(path))
 	sum := sha256.Sum256([]byte(path))
-	return "isolated-dev-" + slug + "-" + hex.EncodeToString(sum[:4])
+	return "isolated-dev-" + slug + "-" + hex.EncodeToString(sum[:8])
 }
 
 func slugify(value string) string {
 	var result strings.Builder
 	previousHyphen := false
 	for _, character := range strings.ToLower(value) {
-		if unicode.IsLetter(character) || unicode.IsDigit(character) {
+		if (character >= 'a' && character <= 'z') ||
+			(character >= '0' && character <= '9') {
 			result.WriteRune(character)
 			previousHyphen = false
 			continue

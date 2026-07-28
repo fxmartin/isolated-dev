@@ -4,13 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
+
+	baseassets "github.com/fxmartin/isolated-dev/images/base"
 )
 
 const DefaultVersion = "1"
+const managedReferencePrefix = "local/isolated-dev-base:"
 
 var versionPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 
@@ -44,6 +49,15 @@ func Reference(version string) (string, error) {
 	return "local/isolated-dev-base:" + version, nil
 }
 
+func IsManagedReference(reference string) bool {
+	version, managed := strings.CutPrefix(reference, managedReferencePrefix)
+	if !managed {
+		return false
+	}
+	expectedReference, err := Reference(version)
+	return err == nil && reference == expectedReference
+}
+
 func (manager Manager) Ensure(
 	ctx context.Context,
 	version string,
@@ -75,6 +89,48 @@ func (manager Manager) Ensure(
 		return EnsureResult{}, fmt.Errorf("build base image %s: %w\n%s", reference, err, output)
 	}
 	return EnsureResult{Reference: reference, Built: true}, nil
+}
+
+func (manager Manager) EnsureReference(ctx context.Context, reference string) error {
+	version, managed := strings.CutPrefix(reference, managedReferencePrefix)
+	if !managed {
+		return fmt.Errorf(
+			"base image %q is not a managed isolated-dev image",
+			reference,
+		)
+	}
+	expectedReference, err := Reference(version)
+	if err != nil {
+		return err
+	}
+	if reference != expectedReference {
+		return fmt.Errorf("invalid managed base-image reference %q", reference)
+	}
+
+	contextDir, err := os.MkdirTemp("", "isolated-dev-base-*")
+	if err != nil {
+		return fmt.Errorf("create temporary base-image context: %w", err)
+	}
+	defer os.RemoveAll(contextDir)
+
+	for _, asset := range []struct {
+		name string
+		mode os.FileMode
+	}{
+		{name: "Dockerfile", mode: 0o600},
+		{name: "isolated-dev-dockerd", mode: 0o700},
+	} {
+		data, err := baseassets.Files.ReadFile(asset.name)
+		if err != nil {
+			return fmt.Errorf("read embedded base-image asset %s: %w", asset.name, err)
+		}
+		if err := os.WriteFile(filepath.Join(contextDir, asset.name), data, asset.mode); err != nil {
+			return fmt.Errorf("write temporary base-image asset %s: %w", asset.name, err)
+		}
+	}
+
+	_, err = manager.Ensure(ctx, version, contextDir)
+	return err
 }
 
 func (manager Manager) WaitDocker(ctx context.Context, machineName string) error {
