@@ -188,6 +188,7 @@ func validate(cfg Config) error {
 		return errors.New("resources.memory_gb: must be positive")
 	}
 	names := make(map[string]struct{}, len(cfg.Ports))
+	hostPorts := make(map[int]string, len(cfg.Ports))
 	for index, port := range cfg.Ports {
 		field := fmt.Sprintf("ports[%d]", index)
 		if strings.TrimSpace(port.Name) == "" {
@@ -203,6 +204,12 @@ func validate(cfg Config) error {
 		if !validPort(port.Host) {
 			return fmt.Errorf("%s.host: must be between 1 and 65535", field)
 		}
+		// One macOS port can carry one forward, so a clash — including one a
+		// local override introduces — is rejected before any tunnel is built.
+		if owner, exists := hostPorts[port.Host]; exists {
+			return fmt.Errorf("%s.host: %d is already forwarded by ports.%s", field, port.Host, owner)
+		}
+		hostPorts[port.Host] = port.Name
 	}
 
 	for _, name := range cfg.CommandNames() {

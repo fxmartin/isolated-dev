@@ -58,6 +58,19 @@ func TestValidateRejectsUnsafeEffectiveConfiguration(t *testing.T) {
 			want: "duplicate",
 		},
 		{
+			// Two mappings on one macOS port cannot both be forwarded, so the
+			// clash is named here rather than surfacing as a tunnel that
+			// silently drops one of them.
+			name: "duplicate host port",
+			mutate: func(cfg *Config) {
+				cfg.Ports = []Port{
+					{Name: "web", Guest: 3000, Host: 3000},
+					{Name: "api", Guest: 8000, Host: 3000},
+				}
+			},
+			want: "ports[1].host: 3000 is already forwarded by ports.web",
+		},
+		{
 			name: "invalid guest port",
 			mutate: func(cfg *Config) {
 				cfg.Ports = []Port{{Name: "web", Guest: 0, Host: 3000}}

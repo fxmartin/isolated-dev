@@ -35,6 +35,10 @@ environment = ["API_TOKEN"]
 files = [".env"]
 ```
 
+Each `[[ports]]` entry declares one forwarded mapping; see
+[Localhost Port Tunnels](#localhost-port-tunnels). Names must be unique, and so
+must `host` ports, because one macOS port can carry one forward.
+
 Use the Git-ignored `.isolated-dev.local.toml` only for local resources and host
 port overrides:
 
@@ -218,6 +222,60 @@ has established one:
 ```
 SSH: isolated-dev-app-abcd1234 (fx@192.168.64.5)
 ```
+
+## Localhost Port Tunnels
+
+Every `up` and `open` reconciles a single background SSH tunnel that binds the
+declared `[[ports]]` to macOS loopback, and reports it after the SSH host it
+connects through:
+
+```
+ready /Users/fx/dev/app
+guest fx (501:20) at /Users/fx/dev/app
+ssh isolated-dev-app-abcd1234 (fx@192.168.64.5)
+tunnel pid 4242 (web localhost:3001 -> guest:3000, api localhost:8001 -> guest:8000)
+```
+
+The tunnel runs in a session of its own, with no stream attached to the command
+that started it, so `http://localhost:3001` keeps working after `isolated-dev`
+exits and after Zed is closed — the machine is what has to stay running, not the
+CLI or the editor. Each forward binds `127.0.0.1` only, so guest services are
+never published to the local network. The target is the managed host alias, so
+the address, the guest account, and the tool-owned host keys all come from the
+SSH configuration `up` maintains.
+
+Reconciliation is idempotent and never leaves two processes on the same ports.
+A tunnel that already forwards exactly the declared mappings from the machine's
+current address is left running; a machine that moved to a new address, a
+machine that was recreated by `upgrade`, a changed `[[ports]]` list, and a
+tunnel whose process died all replace the recorded tunnel with exactly one new
+one. Each machine's tunnel is recorded
+under `~/Library/Application Support/isolated-dev/tunnels/`, and the recorded
+process is only ever signalled while its command line still identifies it as
+that machine's tunnel, so a reused process ID is never mistaken for one.
+
+A macOS port that something else already listens on is reported rather than
+seized. The existing listener keeps its socket, the remaining ports are still
+forwarded, and the conflict is recorded so `status` explains it later:
+
+```
+warning: web: macOS port 3001 is already in use, so guest port 3000 is not forwarded; free the port and rerun up
+```
+
+```
+Tunnel: running (pid 4242): api localhost:8001 -> guest:8000; web not forwarded (macOS port 3001 in use)
+```
+
+`status` otherwise reports the live tunnel, or `stopped` when no process is
+running:
+
+```
+Tunnel: running (pid 4242): web localhost:3001 -> guest:3000
+```
+
+`stop` and `destroy` terminate the tunnel once the machine operation succeeds,
+and leave it alone when the machine survives the attempt. Cleanup waits for the
+process to release its ports, and repeating it is safe.
 
 ## Project Commands
 
