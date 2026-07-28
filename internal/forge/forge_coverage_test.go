@@ -231,6 +231,12 @@ func TestRecordBodyKeepsEvidenceWithoutTheWholePage(t *testing.T) {
 	if got := recordBody("  ok  "); got != "ok" {
 		t.Errorf("recordBody() = %q, want the trimmed body", got)
 	}
+	// A body that is exactly the limit is evidence in full, not evidence with an
+	// ellipsis claiming something was left out.
+	whole := strings.Repeat("a", maxRecordedBody)
+	if got := recordBody(whole); got != whole {
+		t.Errorf("recordBody() truncated a body of exactly %d characters", maxRecordedBody)
+	}
 }
 
 func TestBoundedBufferKeepsTheBeginningOfALongStream(t *testing.T) {
@@ -288,5 +294,260 @@ func TestShortenKeepsLongOutputReadable(t *testing.T) {
 	}
 	if !strings.HasSuffix(issue.Signature, "…") {
 		t.Errorf("Signature = %q, want a long line truncated", issue.Signature)
+	}
+}
+
+// TestRunReadsOnlyTheLogsOfTheServicesThatAreNotReady pins the selection the
+// failure report makes. A Forge DEV stack prints a lot, and a report that
+// dumped all four services' logs would bury the one that explains the failure.
+func TestRunReadsOnlyTheLogsOfTheServicesThatAreNotReady(t *testing.T) {
+	test := newHarness(t)
+	crashed := runningStates()
+	crashed["rosetta-dev-worker"] = "rosetta-backend:latest false none"
+	test.runner.respond = healthyStack(crashed)
+
+	if _, err := test.run(t); err == nil {
+		t.Fatal("Run() error = nil, want the stopped worker reported")
+	}
+
+	test.runner.ran(t, "docker logs --tail 100 rosetta-dev-worker")
+	for _, ready := range []string{"rosetta-dev-db", "rosetta-dev-backend", "rosetta-dev-frontend"} {
+		for _, line := range test.runner.lines() {
+			if strings.Contains(line, "docker logs") && strings.Contains(line, ready) {
+				t.Errorf("the report read the logs of %s, which was already healthy", ready)
+			}
+		}
+	}
+}
+
+// TestRunReportsAWrongImageWithoutWaitingOutTheHealthBudget holds the run to
+// the distinction it makes between "not ready yet" and "never will be": a
+// service on the wrong image is the second, so waiting would only delay the
+// answer by the whole retry budget.
+func TestRunReportsAWrongImageWithoutWaitingOutTheHealthBudget(t *testing.T) {
+	test := newHarness(t)
+	wrong := runningStates()
+	wrong["rosetta-dev-db"] = "postgres:15-alpine true healthy"
+	inspections := 0
+	test.runner.respond = func(call recordedCall) ([]byte, error) {
+		if strings.Contains(call.line(), "docker inspect") {
+			inspections++
+		}
+		return healthyStack(wrong)(call)
+	}
+
+	if _, err := test.run(t); err == nil {
+		t.Fatal("Run() error = nil, want the wrong PostgreSQL version reported")
+	}
+	if inspections != 1 {
+		t.Errorf("docker inspect ran %d times, want the wrong image reported on the first check", inspections)
+	}
+	if test.slept != 0 {
+		t.Errorf("the run paused %d times waiting for an image that never becomes the right one", test.slept)
+	}
+}
+
+// TestRunInspectsTheGuestWithoutAShellAndWithAnExplicitPath pins how guest
+// commands are issued. `container machine run` guarantees no PATH, and passing
+// the container names as separate arguments is what keeps a name out of a
+// shell's hands.
+func TestRunInspectsTheGuestWithoutAShellAndWithAnExplicitPath(t *testing.T) {
+	test := newHarness(t)
+	if _, err := test.run(t); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	inspect := test.runner.ran(t, "docker inspect")
+	if inspect.name != "container" {
+		t.Errorf("guest inspection ran %q, want the `container` CLI", inspect.name)
+	}
+	wantPrefix := []string{
+		"machine", "run",
+		"--name", test.request.MachineName,
+		"--root",
+		"--",
+		"/usr/bin/env", "PATH=" + guestPath,
+		"docker", "inspect",
+	}
+	if len(inspect.args) < len(wantPrefix) {
+		t.Fatalf("guest inspection args = %v, want them to start with %v", inspect.args, wantPrefix)
+	}
+	if got := strings.Join(inspect.args[:len(wantPrefix)], " "); got != strings.Join(wantPrefix, " ") {
+		t.Errorf("guest inspection ran %q, want %q", got, strings.Join(wantPrefix, " "))
+	}
+	for _, arg := range inspect.args {
+		if arg == "-c" || arg == "sh" || arg == "bash" {
+			t.Errorf("guest inspection args = %v, want no shell interpreting any of it", inspect.args)
+		}
+	}
+}
+
+// TestDiagnosticsAddressTheProjectsOwnComposeStack keeps a failure report
+// pointed at the repository's own Compose file. A diagnostic that discovered a
+// stack instead could describe a different one than the run started.
+func TestDiagnosticsAddressTheProjectsOwnComposeStack(t *testing.T) {
+	test := newHarness(t)
+	test.executor.exitCode = 1
+
+	if _, err := test.run(t); err == nil {
+		t.Fatal("Run() error = nil, want the failed startup reported")
+	}
+
+	composeCalls := 0
+	for _, line := range test.runner.lines() {
+		if !strings.Contains(line, "docker compose") {
+			continue
+		}
+		composeCalls++
+		for _, want := range []string{
+			"--project-directory " + test.request.GuestProjectPath,
+			"--file " + test.request.GuestProjectPath + "/" + ComposeFileName,
+			"--profile " + DevProfile,
+		} {
+			if !strings.Contains(line, want) {
+				t.Errorf("diagnostic %q does not pin %q", line, want)
+			}
+		}
+	}
+	if composeCalls != 2 {
+		t.Errorf("ran %d Compose diagnostics, want the stack listed and its logs read", composeCalls)
+	}
+}
+
+// TestRunVerifiesTheServicesAndEndpointsTheRequestNames proves the DEV profile
+// is the default rather than the only thing the run can check, which is what
+// lets the same acceptance path cover a stack that is not Forge's.
+func TestRunVerifiesTheServicesAndEndpointsTheRequestNames(t *testing.T) {
+	test := newHarness(t)
+	test.request.Services = []Service{
+		{Container: "rosetta-dev-docs", Description: "the docs site", ImagePrefix: "nginx:"},
+	}
+	test.request.Endpoints = []Endpoint{
+		{Label: "docs", Path: "/docs", HostPort: 9001, GuestPort: 9001},
+	}
+	test.request.Config.Ports = []config.Port{{Name: "docs", Guest: 9001, Host: 9001}}
+	test.tunnels.state = tunnel.State{
+		Running:  true,
+		PID:      4242,
+		Forwards: []tunnel.Forward{{Name: "docs", Host: 9001, Guest: 9001}},
+	}
+	test.runner.respond = func(call recordedCall) ([]byte, error) {
+		if strings.Contains(call.line(), "docker inspect") {
+			return []byte("nginx:1.27 true healthy\n"), nil
+		}
+		return nil, nil
+	}
+
+	result, err := test.run(t)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(result.Services) != 1 || result.Services[0].Container != "rosetta-dev-docs" {
+		t.Errorf("Result.Services = %+v, want only the service the request named", result.Services)
+	}
+	inspect := test.runner.ran(t, "docker inspect")
+	for _, service := range DevServices() {
+		if strings.Contains(inspect.line(), service.Container) {
+			t.Errorf("docker inspect checked %s, which the request did not name", service.Container)
+		}
+	}
+	if len(test.prober.urls) != 1 || test.prober.urls[0] != "http://127.0.0.1:9001/docs" {
+		t.Errorf("probed %v, want only the endpoint the request named", test.prober.urls)
+	}
+}
+
+// TestRunReturnsWhatItProvedWhenALaterStepFails holds Run to its contract of
+// reporting how far it got: a run that reached macOS and failed on the second
+// endpoint still has to say the stack started and the Compose file was the
+// repository's own.
+func TestRunReturnsWhatItProvedWhenALaterStepFails(t *testing.T) {
+	test := newHarness(t)
+	test.prober.err = errors.New("connection refused")
+	test.prober.failFor = "8001"
+
+	result, err := test.run(t)
+	if err == nil {
+		t.Fatal("Run() error = nil, want the unreachable backend reported")
+	}
+	if result.ComposeFile != filepath.Join(test.projectDir, ComposeFileName) {
+		t.Errorf("Result.ComposeFile = %q, want the project's own Compose file", result.ComposeFile)
+	}
+	if result.ComposeDigest == "" {
+		t.Error("Result.ComposeDigest is empty on a run that did start the stack")
+	}
+	if strings.Join(result.Command, " ") != strings.Join(DevCommandArgs, " ") {
+		t.Errorf("Result.Command = %v, want the declared DEV command", result.Command)
+	}
+	if len(result.Services) != 4 {
+		t.Errorf("Result.Services = %d, want the four services the run did verify", len(result.Services))
+	}
+	if len(result.Endpoints) != 1 || result.Endpoints[0].Label != "frontend" {
+		t.Errorf("Result.Endpoints = %+v, want the one endpoint that did answer", result.Endpoints)
+	}
+}
+
+// TestDefaultRetryBudgetsCoverTheDocumentedStartPeriod checks the defaults
+// against the thing they exist for. The FastAPI backend declares a 60-second
+// health start period, so a budget shorter than that would report a stack that
+// was merely still starting as broken.
+func TestDefaultRetryBudgetsCoverTheDocumentedStartPeriod(t *testing.T) {
+	const backendHealthStartPeriod = 60 * time.Second
+
+	var delay time.Duration
+	defaults := Acceptance{Sleep: func(waited time.Duration) { delay = waited }}
+	if err := defaults.pause(context.Background(), 0, 2); err != nil {
+		t.Fatalf("pause() error = %v", err)
+	}
+	if delay <= 0 {
+		t.Fatalf("the default retry delay is %v, want a real wait between attempts", delay)
+	}
+
+	if health := time.Duration(defaults.healthTries()-1) * delay; health < backendHealthStartPeriod {
+		t.Errorf(
+			"the default health budget is %v, want it to outlast the %v backend health start period",
+			health,
+			backendHealthStartPeriod,
+		)
+	}
+	if probe := time.Duration(defaults.probeTries()-1) * delay; probe < 10*time.Second {
+		t.Errorf("the default probe budget is %v, want a healthy stack time to answer through the forward", probe)
+	}
+}
+
+// TestRunListsTheDeclaredCommandsWhenTheDevCommandIsUnknown makes the rejection
+// actionable: the project declares the DEV command under a name of its own
+// choosing, so the report has to say which names it did find.
+func TestRunListsTheDeclaredCommandsWhenTheDevCommandIsUnknown(t *testing.T) {
+	test := newHarness(t)
+	test.request.Config.Commands["stack"] = config.Command{
+		Args:    append([]string(nil), DevCommandArgs...),
+		Compose: true,
+	}
+	test.request.CommandName = "start"
+
+	_, err := test.run(t)
+	if err == nil {
+		t.Fatal("Run() error = nil, want the undeclared command reported")
+	}
+	for _, want := range []string{"dev", "stack"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to list the declared command %q", err, want)
+		}
+	}
+}
+
+// TestRunNamesThePortsEntryThatCannotReachTheEndpoint keeps the fix in the
+// report: the entry is matched by its macOS port, so the name is the only thing
+// that says which line of the configuration to edit.
+func TestRunNamesThePortsEntryThatCannotReachTheEndpoint(t *testing.T) {
+	test := newHarness(t)
+	test.request.Config.Ports[1] = config.Port{Name: "backend-health", Guest: 8000, Host: 8001}
+
+	_, err := test.run(t)
+	if err == nil {
+		t.Fatal("Run() error = nil, want the mismatched port reported")
+	}
+	if !strings.Contains(err.Error(), "ports.backend-health") {
+		t.Errorf("error = %q, want it to name the [[ports]] entry to fix", err)
 	}
 }

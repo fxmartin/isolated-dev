@@ -144,6 +144,31 @@ func TestArchitectureIssueReportsWhatItCouldNotName(t *testing.T) {
 	}
 }
 
+// TestArchitectureIssueNamesTheImageAndTheBuildStepTogether covers the report
+// the acceptance criteria ask for when the output carries both: a build that
+// stopped on an image it could not pull is located by the pair, not by either
+// half of it.
+func TestArchitectureIssueNamesTheImageAndTheBuildStepTogether(t *testing.T) {
+	output := strings.Join([]string{
+		" > [rosetta-dev-db internal] load metadata for docker.io/library/postgres:16-alpine:",
+		"------",
+		"ERROR: failed to solve: postgres:16-alpine: no matching manifest for linux/arm64/v8 in the manifest list entries",
+	}, "\n")
+
+	issue, found := ClassifyArchitecture(output)
+	if !found {
+		t.Fatal("ClassifyArchitecture() found = false, want the missing arm64 manifest reported")
+	}
+	if issue.Image == "" || issue.BuildStep == "" {
+		t.Fatalf("issue = %+v, want both the image and the build step recovered", issue)
+	}
+	affected := issue.Affected()
+	if !strings.Contains(affected, "image "+issue.Image) ||
+		!strings.Contains(affected, "build step "+issue.BuildStep) {
+		t.Errorf("Affected() = %q, want it to name the image and the build step it failed at", affected)
+	}
+}
+
 func TestClassifyArchitecturePrefersTheRootCauseOverItsConsequence(t *testing.T) {
 	// A missing arm64 manifest is why the following step could not execute, so
 	// the report has to name the image rather than the failure it caused.

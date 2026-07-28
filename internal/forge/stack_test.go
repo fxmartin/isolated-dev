@@ -1,6 +1,8 @@
 package forge
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,8 +129,11 @@ func TestComposeDigestReadsTheProjectComposeFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ComposeDigest() error = %v", err)
 	}
-	if len(digest) != 64 {
-		t.Errorf("ComposeDigest() = %q, want a hex SHA-256", digest)
+	// The digest is the evidence that the repository's own file started the
+	// stack, so it has to be the SHA-256 of that file's bytes and nothing else.
+	sum := sha256.Sum256([]byte("services: {}\n"))
+	if want := hex.EncodeToString(sum[:]); digest != want {
+		t.Errorf("ComposeDigest() = %q, want the SHA-256 %q of the file's contents", digest, want)
 	}
 
 	again, err := ComposeDigest(dir)
