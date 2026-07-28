@@ -35,6 +35,7 @@ func main() {
 		StateStore:       store,
 		MachineManager:   machineManager,
 		GuestProvisioner: guest.Provisioner{Runner: runner},
+		ImageEnsurer:     imageManager,
 		WarningOutput:    os.Stderr,
 	}
 	os.Exit(cli.Run(os.Args[1:], cli.Dependencies{
@@ -52,6 +53,9 @@ func main() {
 		},
 		Destroy: func(path string) error {
 			return application.Destroy(context.Background(), path)
+		},
+		Upgrade: func(path string, confirmed bool) error {
+			return application.Upgrade(context.Background(), path, confirmed, os.Stdout)
 		},
 	}))
 }

@@ -55,6 +55,49 @@ func TestWriteOmitsSecretReferencesAndValues(t *testing.T) {
 	}
 }
 
+// A newer base image never migrates a machine on its own: status reports the
+// available version while the machine stays pinned to the one it was built on.
+func TestWriteReportsAnAvailableBaseImageWhileTheMachineStaysPinned(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	if err := Write(&output, Snapshot{
+		BaseImage:          "local/isolated-dev-base:1",
+		AvailableBaseImage: "local/isolated-dev-base:2",
+		Config:             config.Config{Resources: config.Resources{CPUs: 4, MemoryGB: 8}},
+	}); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	got := output.String()
+	want := "Base image: local/isolated-dev-base:1 (pinned; local/isolated-dev-base:2 available, run upgrade)"
+	if !strings.Contains(got, want) {
+		t.Errorf("status output missing %q:\n%s", want, got)
+	}
+}
+
+func TestWriteOmitsTheAvailableBaseImageWhenTheMachineIsCurrent(t *testing.T) {
+	t.Parallel()
+
+	for name, snapshot := range map[string]Snapshot{
+		"matching":  {BaseImage: "local/isolated-dev-base:1", AvailableBaseImage: "local/isolated-dev-base:1"},
+		"unknown":   {BaseImage: "local/isolated-dev-base:1"},
+		"uncreated": {BaseImage: "local/isolated-dev-base:1", AvailableBaseImage: ""},
+	} {
+		snapshot := snapshot
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var output bytes.Buffer
+			if err := Write(&output, snapshot); err != nil {
+				t.Fatalf("Write() error = %v", err)
+			}
+			if got := output.String(); !strings.Contains(got, "Base image: local/isolated-dev-base:1\n") {
+				t.Errorf("status output = %q, want an unadorned base image line", got)
+			}
+		})
+	}
+}
+
 func TestWriteReportsGuestIdentityAndMountedProject(t *testing.T) {
 	t.Parallel()
 

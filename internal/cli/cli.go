@@ -6,13 +6,16 @@ import (
 )
 
 type Dependencies struct {
-	Stdout   io.Writer
-	Stderr   io.Writer
-	Version  string
-	Status   func(string) error
-	Up       func(string) error
-	Stop     func(string) error
-	Destroy  func(string) error
+	Stdout  io.Writer
+	Stderr  io.Writer
+	Version string
+	Status  func(string) error
+	Up      func(string) error
+	Stop    func(string) error
+	Destroy func(string) error
+	// Upgrade previews the base-image recreation, and performs it only when
+	// the confirmation is passed through.
+	Upgrade  func(string, bool) error
 	OnMutate func()
 }
 
@@ -30,8 +33,27 @@ func Run(args []string, deps Dependencies) int {
 	if len(args) == 2 && args[0] == "stop" {
 		return runCommand("stop", args[1], deps.Stop, deps, true)
 	}
+	// `upgrade --yes` alone is a forgotten project path, not a preview of a
+	// project named "--yes": naming the real mistake beats a resolve failure.
+	if len(args) == 2 && args[0] == "upgrade" && args[1] == "--yes" {
+		fmt.Fprintln(deps.Stderr, "upgrade: pass the project path, as in `isolated-dev upgrade --yes PROJECT`")
+		return 2
+	}
+	// A bare `upgrade` is the preview: it reports what a recreation would
+	// discard and changes nothing.
+	if len(args) == 2 && args[0] == "upgrade" {
+		return runUpgrade(args[1], false, deps)
+	}
+	if len(args) == 3 && args[0] == "upgrade" {
+		projectPath, confirmed := confirmedYes(args[1:])
+		if !confirmed {
+			fmt.Fprintln(deps.Stderr, "upgrade: pass --yes to confirm recreating the project machine")
+			return 2
+		}
+		return runUpgrade(projectPath, true, deps)
+	}
 	if len(args) == 3 && args[0] == "destroy" {
-		projectPath, confirmed := confirmedDestroy(args[1:])
+		projectPath, confirmed := confirmedYes(args[1:])
 		if !confirmed {
 			fmt.Fprintln(deps.Stderr, "destroy: pass --yes to confirm deletion of the project machine and persistent data")
 			return 2
@@ -45,9 +67,18 @@ func Run(args []string, deps Dependencies) int {
 
 	fmt.Fprintln(
 		deps.Stderr,
-		"usage: isolated-dev <up PROJECT|status PROJECT|stop PROJECT|destroy --yes PROJECT|--version>",
+		"usage: isolated-dev <up PROJECT|status PROJECT|stop PROJECT|upgrade [--yes] PROJECT|destroy --yes PROJECT|--version>",
 	)
 	return 2
+}
+
+func runUpgrade(projectPath string, confirmed bool, deps Dependencies) int {
+	if deps.Upgrade == nil {
+		fmt.Fprintln(deps.Stderr, "upgrade: command is unavailable")
+		return 1
+	}
+	command := func(path string) error { return deps.Upgrade(path, confirmed) }
+	return runCommand("upgrade", projectPath, command, deps, confirmed)
 }
 
 func runCommand(
@@ -71,7 +102,7 @@ func runCommand(
 	return 0
 }
 
-func confirmedDestroy(args []string) (string, bool) {
+func confirmedYes(args []string) (string, bool) {
 	if args[0] == "--yes" {
 		return args[1], true
 	}

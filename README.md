@@ -155,6 +155,60 @@ lifecycle state. It requires an explicit confirmation flag:
 isolated-dev destroy --yes /path/to/repository
 ```
 
+## Base-Image Upgrades
+
+A machine keeps running the base image it was created from. Pointing
+`base_image` at a newer version in `.isolated-dev.toml` never migrates an
+existing machine on its own; `status` reports the newer image as available
+while the machine stays pinned:
+
+```
+Base image: local/isolated-dev-base:1 (pinned; local/isolated-dev-base:2 available, run upgrade)
+```
+
+Apple Container Machine cannot move a machine between base images, so an
+upgrade recreates it. A bare `upgrade` is the preview: it changes nothing and
+reports the current and target versions plus the guest-only state a recreation
+would discard.
+
+```sh
+isolated-dev upgrade /path/to/repository
+```
+
+```
+Upgrade: /Users/fx/dev/app
+Machine: isolated-dev-app-abcd1234
+Current base image: local/isolated-dev-base:1 (version 1)
+Target base image: local/isolated-dev-base:2 (version 2)
+Recreating the machine discards state that exists only inside it:
+  - guest packages installed after provisioning
+  - Docker images and build cache
+  - Docker Compose volumes and the data inside them
+  - guest home directory contents outside the mounted project
+  - guest-only data such as databases, shell history, and tool caches
+Preserved: the macOS project source at /Users/fx/dev/app is mounted, not copied.
+No changes made. Re-run with --yes to recreate isolated-dev-app-abcd1234 on local/isolated-dev-base:2.
+```
+
+Declining the preview — that is, simply not re-running it — leaves the machine,
+its tunnel, and its persistent state untouched. Recreation happens only with an
+explicit confirmation flag:
+
+```sh
+isolated-dev upgrade --yes /path/to/repository
+```
+
+Every precondition that `up` enforces — a managed base image, a repository
+inside the home mount, a resolvable guest identity, and a usable public key —
+is checked before the existing machine is destroyed, and the target base image
+is built first as well, so an offline host or a broken image build fails while
+the machine and its guest-only data are still intact. A rejected upgrade never
+leaves you without a machine. The replacement is created through the
+ordinary `up` path, so mount, identity, SSH, and tunnel reconciliation behave
+exactly as they do for any other machine. If the configured image already
+matches the pinned one, `upgrade` reports that and does nothing, even with
+`--yes`.
+
 ## Development
 
 ```sh

@@ -127,6 +127,145 @@ func TestDestroyRequiresExplicitConfirmation(t *testing.T) {
 	}
 }
 
+// A bare `upgrade` is the preview, so it must reach the command without being
+// treated as a mutation.
+func TestUpgradePreviewsWithoutConfirmationOrMutation(t *testing.T) {
+	t.Parallel()
+
+	var stderr bytes.Buffer
+	upgradePath := ""
+	upgradeConfirmed := true
+	mutated := false
+	exitCode := Run([]string{"upgrade", "/tmp/project"}, Dependencies{
+		Stdout: &bytes.Buffer{},
+		Stderr: &stderr,
+		Upgrade: func(path string, confirmed bool) error {
+			upgradePath = path
+			upgradeConfirmed = confirmed
+			return nil
+		},
+		OnMutate: func() {
+			mutated = true
+		},
+	})
+
+	if exitCode != 0 {
+		t.Fatalf("Run() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
+	}
+	if upgradePath != "/tmp/project" {
+		t.Errorf("upgrade path = %q, want /tmp/project", upgradePath)
+	}
+	if upgradeConfirmed {
+		t.Error("bare upgrade was confirmed, want a preview")
+	}
+	if mutated {
+		t.Fatal("upgrade preview invoked a mutating dependency")
+	}
+}
+
+func TestUpgradeRecreatesAfterExplicitConfirmation(t *testing.T) {
+	t.Parallel()
+
+	upgradePath := ""
+	upgradeConfirmed := false
+	mutated := false
+	exitCode := Run([]string{"upgrade", "--yes", "/tmp/project"}, Dependencies{
+		Stdout: &bytes.Buffer{},
+		Stderr: &bytes.Buffer{},
+		Upgrade: func(path string, confirmed bool) error {
+			upgradePath = path
+			upgradeConfirmed = confirmed
+			return nil
+		},
+		OnMutate: func() {
+			mutated = true
+		},
+	})
+
+	if exitCode != 0 {
+		t.Fatalf("Run() exit code = %d, want 0", exitCode)
+	}
+	if upgradePath != "/tmp/project" || !upgradeConfirmed {
+		t.Errorf("upgrade = (%q, %t), want (/tmp/project, true)", upgradePath, upgradeConfirmed)
+	}
+	if !mutated {
+		t.Error("confirmed upgrade did not report a mutation")
+	}
+}
+
+func TestUpgradeRejectsAnUnknownConfirmationFlag(t *testing.T) {
+	t.Parallel()
+
+	var stderr bytes.Buffer
+	invoked := false
+	exitCode := Run([]string{"upgrade", "--force", "/tmp/project"}, Dependencies{
+		Stdout: &bytes.Buffer{},
+		Stderr: &stderr,
+		Upgrade: func(string, bool) error {
+			invoked = true
+			return nil
+		},
+	})
+
+	if exitCode == 0 {
+		t.Fatal("Run() exit code = 0, want confirmation failure")
+	}
+	if invoked {
+		t.Fatal("upgrade dependency invoked without --yes")
+	}
+	if !bytes.Contains(stderr.Bytes(), []byte("--yes")) {
+		t.Errorf("stderr = %q, want --yes guidance", stderr.String())
+	}
+}
+
+// A forgotten project path must not be read as a project literally named
+// "--yes", which would surface as an unrelated path-resolution failure.
+func TestUpgradeRejectsAConfirmationWithoutAProjectPath(t *testing.T) {
+	t.Parallel()
+
+	var stderr bytes.Buffer
+	invoked := false
+	mutated := false
+	exitCode := Run([]string{"upgrade", "--yes"}, Dependencies{
+		Stdout: &bytes.Buffer{},
+		Stderr: &stderr,
+		Upgrade: func(string, bool) error {
+			invoked = true
+			return nil
+		},
+		OnMutate: func() {
+			mutated = true
+		},
+	})
+
+	if exitCode != 2 {
+		t.Fatalf("Run() exit code = %d, want 2", exitCode)
+	}
+	if invoked || mutated {
+		t.Fatalf("upgrade ran without a project path: invoked = %t, mutated = %t", invoked, mutated)
+	}
+	if !bytes.Contains(stderr.Bytes(), []byte("pass the project path")) {
+		t.Errorf("stderr = %q, want guidance about the missing project path", stderr.String())
+	}
+}
+
+func TestUpgradeReportsAnUnavailableCommand(t *testing.T) {
+	t.Parallel()
+
+	var stderr bytes.Buffer
+	exitCode := Run([]string{"upgrade", "/tmp/project"}, Dependencies{
+		Stdout: &bytes.Buffer{},
+		Stderr: &stderr,
+	})
+
+	if exitCode != 1 {
+		t.Fatalf("Run() exit code = %d, want 1", exitCode)
+	}
+	if !bytes.Contains(stderr.Bytes(), []byte("unavailable")) {
+		t.Errorf("stderr = %q, want an unavailable-command message", stderr.String())
+	}
+}
+
 func TestDestroyRunsAfterExplicitConfirmation(t *testing.T) {
 	t.Parallel()
 

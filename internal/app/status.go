@@ -35,8 +35,11 @@ type App struct {
 	StateStore       state.Store
 	MachineManager   MachineManager
 	GuestProvisioner GuestProvisioner
-	HomeDir          string
-	WarningOutput    io.Writer
+	// ImageEnsurer builds the target base image before `upgrade` destroys the
+	// machine it is replacing.
+	ImageEnsurer  ImageEnsurer
+	HomeDir       string
+	WarningOutput io.Writer
 	// ResolveIdentity defaults to the invoking macOS user.
 	ResolveIdentity func() (guest.Identity, error)
 }
@@ -70,6 +73,7 @@ func (app App) Status(ctx context.Context, projectPath string, output io.Writer)
 	if err == nil {
 		snapshot.MachineStatus = "unknown"
 		snapshot.BaseImage = stored.BaseImage
+		snapshot.AvailableBaseImage = effectiveConfig.BaseImage
 		snapshot.MountScope = stored.MountScope
 		snapshot.TunnelStatus = "unknown"
 		snapshot.GuestUser = stored.GuestUser
@@ -85,48 +89,77 @@ func (app App) Status(ctx context.Context, projectPath string, output io.Writer)
 	return statusview.Write(output, snapshot)
 }
 
-func (app App) Up(ctx context.Context, projectPath string, output io.Writer) error {
+// upPreparation holds everything `up` establishes before it mutates any
+// machine. `upgrade` runs the same preparation so a rejected repository,
+// missing key, or unmanaged image fails while the existing machine — and the
+// guest data only it holds — is still intact.
+type upPreparation struct {
+	project       project.Project
+	config        config.Config
+	canonicalHome string
+	identity      guest.Identity
+	publicKeys    []string
+}
+
+func (app App) prepareUp(ctx context.Context, projectPath string) (upPreparation, error) {
 	resolved, err := project.Resolve(projectPath)
 	if err != nil {
-		return err
+		return upPreparation{}, err
 	}
 	effectiveConfig, err := config.Load(resolved.Path)
 	if err != nil {
-		return err
+		return upPreparation{}, err
 	}
 	if _, err := app.HostChecker.Check(ctx); err != nil {
-		return err
+		return upPreparation{}, err
 	}
 	if app.MachineManager == nil {
-		return errors.New("machine lifecycle is not configured")
+		return upPreparation{}, errors.New("machine lifecycle is not configured")
 	}
 	if app.GuestProvisioner == nil {
-		return errors.New("guest provisioning is not configured")
+		return upPreparation{}, errors.New("guest provisioning is not configured")
 	}
 	if !baseimage.IsManagedReference(effectiveConfig.BaseImage) {
-		return fmt.Errorf(
+		return upPreparation{}, fmt.Errorf(
 			"base image %q is not a managed isolated-dev image; refusing to grant it read-write access to the full home directory",
 			effectiveConfig.BaseImage,
 		)
 	}
 	canonicalHome, err := app.canonicalHome()
 	if err != nil {
-		return err
+		return upPreparation{}, err
 	}
 	if err := validateHomeMountedProject(canonicalHome, resolved.Path); err != nil {
-		return err
+		return upPreparation{}, err
 	}
 	// The guest identity and its authorized public keys are resolved before any
 	// machine mutation so a missing key fails without leaving a half-configured
 	// machine behind.
 	identity, err := app.guestIdentity()
 	if err != nil {
-		return err
+		return upPreparation{}, err
 	}
 	publicKeys, err := guest.PublicKeys(filepath.Join(canonicalHome, ".ssh"))
 	if err != nil {
+		return upPreparation{}, err
+	}
+	return upPreparation{
+		project:       resolved,
+		config:        effectiveConfig,
+		canonicalHome: canonicalHome,
+		identity:      identity,
+		publicKeys:    publicKeys,
+	}, nil
+}
+
+func (app App) Up(ctx context.Context, projectPath string, output io.Writer) error {
+	preparation, err := app.prepareUp(ctx, projectPath)
+	if err != nil {
 		return err
 	}
+	resolved := preparation.project
+	effectiveConfig := preparation.config
+	canonicalHome := preparation.canonicalHome
 	if err := app.warn(
 		"warning: this machine receives read-write access to your full home directory",
 	); err != nil {
@@ -151,8 +184,8 @@ func (app App) Up(ctx context.Context, projectPath string, output io.Writer) err
 		MachineName: resolved.MachineName,
 		ProjectPath: resolved.Path,
 		HomeDir:     canonicalHome,
-		Identity:    identity,
-		PublicKeys:  publicKeys,
+		Identity:    preparation.identity,
+		PublicKeys:  preparation.publicKeys,
 	})
 	if err != nil {
 		return err
