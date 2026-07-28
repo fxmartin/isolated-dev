@@ -20,6 +20,12 @@ type Project struct {
 	MountScope       string `json:"mount_scope"`
 	CPUs             int    `json:"cpus"`
 	MemoryGB         int    `json:"memory_gb"`
+	// Guest identity and mounted-project path are recorded after provisioning,
+	// so machines created before this state existed decode without them.
+	GuestUser        string `json:"guest_user,omitempty"`
+	GuestUID         int    `json:"guest_uid,omitempty"`
+	GuestGID         int    `json:"guest_gid,omitempty"`
+	GuestProjectPath string `json:"guest_project_path,omitempty"`
 }
 
 type Store struct {

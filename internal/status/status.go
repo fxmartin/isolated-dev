@@ -16,7 +16,27 @@ type Snapshot struct {
 	BaseImage        string
 	MountScope       string
 	TunnelStatus     string
+	GuestUser        string
+	GuestUID         int
+	GuestGID         int
+	GuestProjectPath string
 	Config           config.Config
+}
+
+const notProvisioned = "not-provisioned"
+
+func guestUser(snapshot Snapshot) string {
+	if snapshot.GuestUser == "" {
+		return notProvisioned
+	}
+	return fmt.Sprintf("%s (%d:%d)", snapshot.GuestUser, snapshot.GuestUID, snapshot.GuestGID)
+}
+
+func orNotProvisioned(value string) string {
+	if value == "" {
+		return notProvisioned
+	}
+	return value
 }
 
 func Write(writer io.Writer, snapshot Snapshot) error {
@@ -28,6 +48,8 @@ func Write(writer io.Writer, snapshot Snapshot) error {
 		"Base image: " + snapshot.BaseImage,
 		"Mount scope: " + snapshot.MountScope,
 		"Tunnel: " + snapshot.TunnelStatus,
+		"Guest user: " + guestUser(snapshot),
+		"Guest project: " + orNotProvisioned(snapshot.GuestProjectPath),
 		fmt.Sprintf(
 			"Resources: %d CPU, %d GB memory",
 			snapshot.Config.Resources.CPUs,

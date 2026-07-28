@@ -126,6 +126,76 @@ api_token = "must-not-be-accepted"
 	}
 }
 
+func TestLoadRejectsSecretReferencesOutsideTheProject(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "absolute file",
+			content: "[secrets]\nfiles = [\"/Users/fx/.aws/credentials\"]",
+			want:    "secrets.files[0]",
+		},
+		{
+			name:    "escaping file",
+			content: "[secrets]\nfiles = [\"../other/.env\"]",
+			want:    "secrets.files[0]",
+		},
+		{
+			name:    "empty file",
+			content: "[secrets]\nfiles = [\"  \"]",
+			want:    "secrets.files[0]",
+		},
+		{
+			name:    "inline environment value",
+			content: "[secrets]\nenvironment = [\"API_TOKEN=super-secret\"]",
+			want:    "secrets.environment[0]",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			projectDir := t.TempDir()
+			writeTestFile(t, filepath.Join(projectDir, SharedFileName), "version = 1\n"+test.content)
+
+			_, err := Load(projectDir)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Load() error = %v, want containing %q", err, test.want)
+			}
+			for _, leaked := range []string{"super-secret", "credentials", "other"} {
+				if strings.Contains(err.Error(), leaked) {
+					t.Fatalf("Load() leaked secret reference detail: %q", err)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsProjectRelativeSecretReferences(t *testing.T) {
+	t.Parallel()
+
+	projectDir := t.TempDir()
+	writeTestFile(t, filepath.Join(projectDir, SharedFileName), `
+version = 1
+[secrets]
+environment = ["API_TOKEN"]
+files = ["config/.env"]
+`)
+
+	loaded, err := Load(projectDir)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(loaded.Secrets.Files) != 1 || loaded.Secrets.Files[0] != "config/.env" {
+		t.Fatalf("secrets.files = %#v, want the reference preserved", loaded.Secrets.Files)
+	}
+}
+
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 
