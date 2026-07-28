@@ -15,8 +15,8 @@ import (
 
 type lifecycleStub struct {
 	upRequests []machine.Request
-	stopped    []string
-	destroyed  []string
+	stopped    []machine.Target
+	destroyed  []machine.Target
 	upErr      error
 	stopErr    error
 	destroyErr error
@@ -31,13 +31,13 @@ func (lifecycle *lifecycleStub) Up(
 	return machine.UpResult{Created: !lifecycle.upExisting}, lifecycle.upErr
 }
 
-func (lifecycle *lifecycleStub) Stop(_ context.Context, machineName string) error {
-	lifecycle.stopped = append(lifecycle.stopped, machineName)
+func (lifecycle *lifecycleStub) Stop(_ context.Context, target machine.Target) error {
+	lifecycle.stopped = append(lifecycle.stopped, target)
 	return lifecycle.stopErr
 }
 
-func (lifecycle *lifecycleStub) Destroy(_ context.Context, machineName string) error {
-	lifecycle.destroyed = append(lifecycle.destroyed, machineName)
+func (lifecycle *lifecycleStub) Destroy(_ context.Context, target machine.Target) error {
+	lifecycle.destroyed = append(lifecycle.destroyed, target)
 	return lifecycle.destroyErr
 }
 
@@ -113,6 +113,42 @@ func TestUpRejectsRepositoryOutsideHomeBeforeLifecycleMutation(t *testing.T) {
 	}
 	if len(lifecycle.upRequests) != 0 {
 		t.Fatalf("up requests = %+v, want no lifecycle mutation", lifecycle.upRequests)
+	}
+}
+
+func TestUpRejectsUnmanagedBaseImageBeforeLifecycleMutation(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	repository := filepath.Join(home, "app")
+	if err := os.MkdirAll(filepath.Join(repository, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(repository, ".isolated-dev.toml"),
+		[]byte("version = 1\nbase_image = \"registry.example/attacker:latest\"\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	lifecycle := &lifecycleStub{}
+	var warnings bytes.Buffer
+	application := App{
+		HostChecker:    passingHostChecker(),
+		MachineManager: lifecycle,
+		HomeDir:        home,
+		WarningOutput:  &warnings,
+	}
+
+	err := application.Up(context.Background(), repository, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "not a managed isolated-dev image") {
+		t.Fatalf("Up() error = %v, want unmanaged image rejection", err)
+	}
+	if len(lifecycle.upRequests) != 0 {
+		t.Fatalf("up requests = %+v, want no lifecycle mutation", lifecycle.upRequests)
+	}
+	if warnings.Len() != 0 {
+		t.Fatalf("warning = %q, want rejection before mount warning", warnings.String())
 	}
 }
 

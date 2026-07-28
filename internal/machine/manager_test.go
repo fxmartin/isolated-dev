@@ -240,13 +240,39 @@ func TestUpRefusesToAdoptMachineWithoutProjectState(t *testing.T) {
 	}
 }
 
+func TestUpRejectsUnmanagedImageBeforeMutation(t *testing.T) {
+	t.Parallel()
+
+	request := validRequest()
+	request.BaseImage = "registry.example/attacker:latest"
+	request.BaseImageVersion = "latest"
+	runner := &runnerStub{}
+	store := &stateStoreStub{loadErr: state.ErrNotFound}
+	manager := Manager{
+		Runner:       runner,
+		StateStore:   store,
+		DockerWaiter: &dockerWaiterStub{},
+	}
+
+	_, err := manager.Up(context.Background(), request)
+	if err == nil || !strings.Contains(err.Error(), "not a managed isolated-dev image") {
+		t.Fatalf("Up() error = %v, want unmanaged image rejection", err)
+	}
+	if len(runner.calls) != 0 || len(store.saved) != 0 {
+		t.Fatalf("runner calls = %+v, saved state = %+v; want no mutation", runner.calls, store.saved)
+	}
+}
+
 func TestStopIsIdempotentWhenMachineDoesNotExist(t *testing.T) {
 	t.Parallel()
 
 	runner := &runnerStub{responses: []response{{output: []byte("[]")}}}
 	manager := Manager{Runner: runner}
 
-	if err := manager.Stop(context.Background(), "isolated-dev-app-abcd1234"); err != nil {
+	if err := manager.Stop(context.Background(), Target{
+		ProjectPath: "/Users/fx/dev/app",
+		MachineName: "isolated-dev-app-abcd1234",
+	}); err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
 	if len(runner.calls) != 1 {
@@ -263,11 +289,15 @@ func TestDestroyDeletesOnlyResolvedMachineAndState(t *testing.T) {
 	}}
 	store := &stateStoreStub{project: state.Project{
 		SchemaVersion: 1,
+		ProjectPath:   "/Users/fx/dev/app",
 		MachineName:   "isolated-dev-app-abcd1234",
 	}}
 	manager := Manager{Runner: runner, StateStore: store}
 
-	if err := manager.Destroy(context.Background(), "isolated-dev-app-abcd1234"); err != nil {
+	if err := manager.Destroy(context.Background(), Target{
+		ProjectPath: "/Users/fx/dev/app",
+		MachineName: "isolated-dev-app-abcd1234",
+	}); err != nil {
 		t.Fatalf("Destroy() error = %v", err)
 	}
 	wantDelete := []string{"machine", "delete", "isolated-dev-app-abcd1234"}
@@ -288,7 +318,10 @@ func TestDestroyRefusesMachineWithoutProjectState(t *testing.T) {
 	store := &stateStoreStub{loadErr: state.ErrNotFound}
 	manager := Manager{Runner: runner, StateStore: store}
 
-	err := manager.Destroy(context.Background(), "isolated-dev-app-abcd1234")
+	err := manager.Destroy(context.Background(), Target{
+		ProjectPath: "/Users/fx/dev/app",
+		MachineName: "isolated-dev-app-abcd1234",
+	})
 	if err == nil || !strings.Contains(err.Error(), "not managed") {
 		t.Fatalf("Destroy() error = %v, want unmanaged collision error", err)
 	}
@@ -297,5 +330,30 @@ func TestDestroyRefusesMachineWithoutProjectState(t *testing.T) {
 	}
 	if len(store.deleted) != 0 {
 		t.Fatalf("deleted state = %#v, want none", store.deleted)
+	}
+}
+
+func TestDestroyRefusesMachineOwnedByCollidingProjectPath(t *testing.T) {
+	t.Parallel()
+
+	runner := &runnerStub{responses: []response{{
+		output: []byte(`[{"id":"isolated-dev-app-abcd1234","status":"stopped"}]`),
+	}}}
+	store := &stateStoreStub{project: state.Project{
+		SchemaVersion: 1,
+		ProjectPath:   "/Users/fx/dev/project-a/app",
+		MachineName:   "isolated-dev-app-abcd1234",
+	}}
+	manager := Manager{Runner: runner, StateStore: store}
+
+	err := manager.Destroy(context.Background(), Target{
+		ProjectPath: "/Users/fx/dev/project-b/app",
+		MachineName: "isolated-dev-app-abcd1234",
+	})
+	if err == nil || !strings.Contains(err.Error(), "belongs to project") {
+		t.Fatalf("Destroy() error = %v, want project ownership collision", err)
+	}
+	if len(runner.calls) != 1 || len(store.deleted) != 0 {
+		t.Fatalf("runner calls = %+v, deleted state = %+v; want no mutation", runner.calls, store.deleted)
 	}
 }

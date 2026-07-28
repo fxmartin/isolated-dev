@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/fxmartin/isolated-dev/internal/baseimage"
 	"github.com/fxmartin/isolated-dev/internal/config"
 	"github.com/fxmartin/isolated-dev/internal/host"
 	"github.com/fxmartin/isolated-dev/internal/machine"
@@ -19,8 +20,8 @@ import (
 
 type MachineManager interface {
 	Up(context.Context, machine.Request) (machine.UpResult, error)
-	Stop(context.Context, string) error
-	Destroy(context.Context, string) error
+	Stop(context.Context, machine.Target) error
+	Destroy(context.Context, machine.Target) error
 }
 
 type App struct {
@@ -63,6 +64,8 @@ func (app App) Status(ctx context.Context, projectPath string, output io.Writer)
 		snapshot.BaseImage = stored.BaseImage
 		snapshot.MountScope = stored.MountScope
 		snapshot.TunnelStatus = "unknown"
+		snapshot.Config.Resources.CPUs = stored.CPUs
+		snapshot.Config.Resources.MemoryGB = stored.MemoryGB
 	} else if !errors.Is(err, state.ErrNotFound) {
 		return fmt.Errorf("load project state: %w", err)
 	}
@@ -84,6 +87,12 @@ func (app App) Up(ctx context.Context, projectPath string, output io.Writer) err
 	}
 	if app.MachineManager == nil {
 		return errors.New("machine lifecycle is not configured")
+	}
+	if !baseimage.IsManagedReference(effectiveConfig.BaseImage) {
+		return fmt.Errorf(
+			"base image %q is not a managed isolated-dev image; refusing to grant it read-write access to the full home directory",
+			effectiveConfig.BaseImage,
+		)
 	}
 	if err := app.validateHomeMountedProject(resolved.Path); err != nil {
 		return err
@@ -152,7 +161,10 @@ func (app App) Stop(ctx context.Context, projectPath string) error {
 	if err != nil {
 		return err
 	}
-	return app.MachineManager.Stop(ctx, resolved.MachineName)
+	return app.MachineManager.Stop(ctx, machine.Target{
+		ProjectPath: resolved.Path,
+		MachineName: resolved.MachineName,
+	})
 }
 
 func (app App) Destroy(ctx context.Context, projectPath string) error {
@@ -160,7 +172,10 @@ func (app App) Destroy(ctx context.Context, projectPath string) error {
 	if err != nil {
 		return err
 	}
-	return app.MachineManager.Destroy(ctx, resolved.MachineName)
+	return app.MachineManager.Destroy(ctx, machine.Target{
+		ProjectPath: resolved.Path,
+		MachineName: resolved.MachineName,
+	})
 }
 
 func (app App) resolveForMutation(ctx context.Context, projectPath string) (project.Project, error) {

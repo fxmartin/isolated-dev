@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fxmartin/isolated-dev/internal/baseimage"
 	"github.com/fxmartin/isolated-dev/internal/state"
 )
 
@@ -56,6 +57,11 @@ type Request struct {
 
 type UpResult struct {
 	Created bool
+}
+
+type Target struct {
+	ProjectPath string
+	MachineName string
 }
 
 type machineInfo struct {
@@ -117,14 +123,14 @@ func (manager Manager) Up(ctx context.Context, request Request) (UpResult, error
 	return UpResult{Created: created}, nil
 }
 
-func (manager Manager) Stop(ctx context.Context, machineName string) error {
+func (manager Manager) Stop(ctx context.Context, target Target) error {
 	if manager.Runner == nil {
 		return errors.New("machine runner is not configured")
 	}
-	if err := validateMachineName(machineName); err != nil {
+	if err := validateTarget(target); err != nil {
 		return err
 	}
-	machine, exists, err := manager.find(ctx, machineName)
+	machine, exists, err := manager.find(ctx, target.MachineName)
 	if err != nil {
 		return err
 	}
@@ -134,70 +140,107 @@ func (manager Manager) Stop(ctx context.Context, machineName string) error {
 	if !exists || !strings.EqualFold(machine.Status, "running") {
 		return nil
 	}
-	if err := manager.ensureOwned(machineName); err != nil {
+	owned, err := manager.loadOwned(target)
+	if err != nil {
 		return err
 	}
-	output, err := manager.Runner.Run(ctx, "container", "machine", "stop", machineName)
+	if !owned {
+		return fmt.Errorf(
+			"machine %q exists but is not managed by this project",
+			target.MachineName,
+		)
+	}
+	output, err := manager.Runner.Run(
+		ctx,
+		"container",
+		"machine", "stop", target.MachineName,
+	)
 	if err != nil {
-		return fmt.Errorf("stop machine %q: %w\n%s", machineName, err, output)
+		return fmt.Errorf("stop machine %q: %w\n%s", target.MachineName, err, output)
 	}
 	return nil
 }
 
-func (manager Manager) Destroy(ctx context.Context, machineName string) error {
+func (manager Manager) Destroy(ctx context.Context, target Target) error {
 	if manager.Runner == nil {
 		return errors.New("machine runner is not configured")
 	}
 	if manager.StateStore == nil {
 		return errors.New("project state store is not configured")
 	}
-	if err := validateMachineName(machineName); err != nil {
+	if err := validateTarget(target); err != nil {
 		return err
 	}
-	machine, exists, err := manager.find(ctx, machineName)
+	machine, exists, err := manager.find(ctx, target.MachineName)
 	if err != nil {
 		return err
 	}
-	if exists {
-		if err := manager.ensureOwned(machineName); err != nil {
-			return err
+	owned, err := manager.loadOwned(target)
+	if err != nil {
+		return err
+	}
+	if !owned {
+		if exists {
+			return fmt.Errorf(
+				"machine %q exists but is not managed by this project",
+				target.MachineName,
+			)
 		}
+		return nil
+	}
+	if exists {
 		if strings.EqualFold(machine.Status, "running") {
 			// A failed stop is deliberately not fatal: `machine delete` refuses
 			// only a running machine, so the delete below reports the real
 			// blocker instead of dead-ending cleanup here.
-			_, _ = manager.Runner.Run(ctx, "container", "machine", "stop", machineName)
+			_, _ = manager.Runner.Run(
+				ctx,
+				"container",
+				"machine", "stop", target.MachineName,
+			)
 		}
-		output, err := manager.Runner.Run(ctx, "container", "machine", "delete", machineName)
+		output, err := manager.Runner.Run(
+			ctx,
+			"container",
+			"machine", "delete", target.MachineName,
+		)
 		if err != nil {
-			return fmt.Errorf("delete machine %q: %w\n%s", machineName, err, output)
+			return fmt.Errorf("delete machine %q: %w\n%s", target.MachineName, err, output)
 		}
 	}
-	if err := manager.StateStore.Delete(machineName); err != nil {
+	if err := manager.StateStore.Delete(target.MachineName); err != nil {
 		return fmt.Errorf("delete project state: %w", err)
 	}
 	return nil
 }
 
-func (manager Manager) ensureOwned(machineName string) error {
+func (manager Manager) loadOwned(target Target) (bool, error) {
 	if manager.StateStore == nil {
-		return errors.New("project state store is not configured")
+		return false, errors.New("project state store is not configured")
 	}
-	stored, err := manager.StateStore.Load(machineName)
+	stored, err := manager.StateStore.Load(target.MachineName)
 	if errors.Is(err, state.ErrNotFound) {
-		return fmt.Errorf("machine %q exists but is not managed by this project", machineName)
+		return false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("load project state: %w", err)
+		return false, fmt.Errorf("load project state: %w", err)
 	}
-	if stored.MachineName != machineName {
-		return fmt.Errorf(
+	if stored.MachineName != target.MachineName {
+		return false, fmt.Errorf(
 			"project state identifies machine %q instead of %q; refusing lifecycle operation",
 			stored.MachineName,
-			machineName,
+			target.MachineName,
 		)
 	}
-	return nil
+	if stored.ProjectPath != target.ProjectPath {
+		return false, fmt.Errorf(
+			"machine %q belongs to project %q, not %q; refusing lifecycle operation",
+			target.MachineName,
+			stored.ProjectPath,
+			target.ProjectPath,
+		)
+	}
+	return true, nil
 }
 
 func (manager Manager) validateUp(request Request) error {
@@ -218,6 +261,12 @@ func (manager Manager) validateUp(request Request) error {
 	}
 	if strings.TrimSpace(request.BaseImage) == "" {
 		return errors.New("base image must not be empty")
+	}
+	if !baseimage.IsManagedReference(request.BaseImage) {
+		return fmt.Errorf(
+			"base image %q is not a managed isolated-dev image; refusing to grant it read-write access to the full home directory",
+			request.BaseImage,
+		)
 	}
 	if strings.TrimSpace(request.BaseImageVersion) == "" {
 		return errors.New("base-image version must not be empty")
@@ -346,6 +395,16 @@ func validatePinnedConfiguration(stored state.Project, request Request) error {
 func validateMachineName(machineName string) error {
 	if !machineNamePattern.MatchString(machineName) {
 		return fmt.Errorf("invalid machine name %q", machineName)
+	}
+	return nil
+}
+
+func validateTarget(target Target) error {
+	if err := validateMachineName(target.MachineName); err != nil {
+		return err
+	}
+	if !filepath.IsAbs(target.ProjectPath) {
+		return errors.New("project path must be absolute")
 	}
 	return nil
 }

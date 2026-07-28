@@ -3,6 +3,7 @@ package project
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -36,6 +37,12 @@ func TestResolveCanonicalizesPathAndBuildsStableMachineName(t *testing.T) {
 	}
 	if got, wantPrefix := fromRealPath.MachineName, "isolated-dev-my-web-app-"; len(got) <= len(wantPrefix) || got[:len(wantPrefix)] != wantPrefix {
 		t.Errorf("MachineName = %q, want prefix %q and hash", got, wantPrefix)
+	}
+	if suffix := strings.TrimPrefix(
+		fromRealPath.MachineName,
+		"isolated-dev-my-web-app-",
+	); len(suffix) != 16 {
+		t.Errorf("MachineName hash = %q, want 16 hexadecimal characters", suffix)
 	}
 }
 

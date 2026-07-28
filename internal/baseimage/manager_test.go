@@ -110,20 +110,21 @@ func TestEnsureReferenceBuildsMissingManagedImageFromEmbeddedContext(t *testing.
 	}
 }
 
-func TestEnsureReferenceLeavesExternalImagesToMachineCreate(t *testing.T) {
+func TestEnsureReferenceRejectsExternalImages(t *testing.T) {
 	t.Parallel()
 
 	runner := &fakeRunner{}
 	manager := Manager{Runner: runner}
 
-	if err := manager.EnsureReference(
+	err := manager.EnsureReference(
 		context.Background(),
 		"registry.example.com/team/base:2",
-	); err != nil {
-		t.Fatalf("EnsureReference() error = %v", err)
+	)
+	if err == nil || !strings.Contains(err.Error(), "not a managed isolated-dev image") {
+		t.Fatalf("EnsureReference() error = %v, want unmanaged image rejection", err)
 	}
 	if len(runner.calls) != 0 {
-		t.Fatalf("calls = %+v, want external image handled by machine create", runner.calls)
+		t.Fatalf("calls = %+v, want rejection before container access", runner.calls)
 	}
 }
 

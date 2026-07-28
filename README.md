@@ -49,7 +49,10 @@ host = 3100
 ```
 
 Inline secret values and unknown fields are rejected before any host or guest
-state changes.
+state changes. The full-home fallback is restricted to versioned
+`local/isolated-dev-base:<version>` images maintained by `isolated-dev`;
+repository configuration cannot substitute an external image with access to
+the developer's home directory.
 
 ## Guest Base Image
 
@@ -91,8 +94,9 @@ Stopping preserves the machine and its persistent guest data:
 isolated-dev stop /path/to/repository
 ```
 
-Destruction removes only that repository's derived machine and local lifecycle
-state. It requires an explicit confirmation flag:
+Destruction verifies both the canonical repository path and its
+collision-resistant derived machine name before removing that machine and local
+lifecycle state. It requires an explicit confirmation flag:
 
 ```sh
 isolated-dev destroy --yes /path/to/repository

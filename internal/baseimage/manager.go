@@ -49,6 +49,15 @@ func Reference(version string) (string, error) {
 	return "local/isolated-dev-base:" + version, nil
 }
 
+func IsManagedReference(reference string) bool {
+	version, managed := strings.CutPrefix(reference, managedReferencePrefix)
+	if !managed {
+		return false
+	}
+	expectedReference, err := Reference(version)
+	return err == nil && reference == expectedReference
+}
+
 func (manager Manager) Ensure(
 	ctx context.Context,
 	version string,
@@ -85,7 +94,10 @@ func (manager Manager) Ensure(
 func (manager Manager) EnsureReference(ctx context.Context, reference string) error {
 	version, managed := strings.CutPrefix(reference, managedReferencePrefix)
 	if !managed {
-		return nil
+		return fmt.Errorf(
+			"base image %q is not a managed isolated-dev image",
+			reference,
+		)
 	}
 	expectedReference, err := Reference(version)
 	if err != nil {

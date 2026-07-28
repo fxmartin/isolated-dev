@@ -49,7 +49,7 @@ func Resolve(path string) (Project, error) {
 func machineName(path string) string {
 	slug := slugify(filepath.Base(path))
 	sum := sha256.Sum256([]byte(path))
-	return "isolated-dev-" + slug + "-" + hex.EncodeToString(sum[:4])
+	return "isolated-dev-" + slug + "-" + hex.EncodeToString(sum[:8])
 }
 
 func slugify(value string) string {

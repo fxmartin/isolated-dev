@@ -232,19 +232,27 @@ func TestStopAndDestroyRouteOnlyResolvedMachine(t *testing.T) {
 				HostChecker:    passingHostChecker(),
 				MachineManager: lifecycle,
 			}
+			resolved, err := project.Resolve(repository)
+			if err != nil {
+				t.Fatalf("Resolve() error = %v", err)
+			}
 
 			if err := test.operation(application, context.Background(), repository); err != nil {
 				t.Fatalf("%s() error = %v", test.name, err)
 			}
 			if test.wantStop {
-				if len(lifecycle.stopped) != 1 || !strings.HasPrefix(lifecycle.stopped[0], "isolated-dev-") {
+				if len(lifecycle.stopped) != 1 ||
+					!strings.HasPrefix(lifecycle.stopped[0].MachineName, "isolated-dev-") ||
+					lifecycle.stopped[0].ProjectPath != resolved.Path {
 					t.Fatalf("stopped = %#v, want one resolved machine", lifecycle.stopped)
 				}
 				if len(lifecycle.destroyed) != 0 {
 					t.Fatalf("destroyed = %#v, want none", lifecycle.destroyed)
 				}
 			} else {
-				if len(lifecycle.destroyed) != 1 || !strings.HasPrefix(lifecycle.destroyed[0], "isolated-dev-") {
+				if len(lifecycle.destroyed) != 1 ||
+					!strings.HasPrefix(lifecycle.destroyed[0].MachineName, "isolated-dev-") ||
+					lifecycle.destroyed[0].ProjectPath != resolved.Path {
 					t.Fatalf("destroyed = %#v, want one resolved machine", lifecycle.destroyed)
 				}
 				if len(lifecycle.stopped) != 0 {
@@ -327,6 +335,13 @@ func TestStatusUsesStoredLifecycleState(t *testing.T) {
 	t.Parallel()
 
 	repository := appRepository(t)
+	if err := os.WriteFile(
+		filepath.Join(repository, ".isolated-dev.toml"),
+		[]byte("version = 1\n[resources]\ncpus = 6\nmemory_gb = 12\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
 	resolved, err := project.Resolve(repository)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
@@ -338,6 +353,8 @@ func TestStatusUsesStoredLifecycleState(t *testing.T) {
 		MachineName:   resolved.MachineName,
 		BaseImage:     "local/custom-base:7",
 		MountScope:    "repository",
+		CPUs:          4,
+		MemoryGB:      8,
 	}); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -356,10 +373,14 @@ func TestStatusUsesStoredLifecycleState(t *testing.T) {
 		"Base image: local/custom-base:7",
 		"Mount scope: repository",
 		"Tunnel: unknown",
+		"Resources: 4 CPU, 8 GB memory",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("status output missing %q:\n%s", want, output.String())
 		}
+	}
+	if strings.Contains(output.String(), "Resources: 6 CPU, 12 GB memory") {
+		t.Errorf("status reports desired resources as applied:\n%s", output.String())
 	}
 }
 

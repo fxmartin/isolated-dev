@@ -22,6 +22,14 @@ func validRequest() Request {
 	}
 }
 
+func validTarget() Target {
+	request := validRequest()
+	return Target{
+		ProjectPath: request.ProjectPath,
+		MachineName: request.MachineName,
+	}
+}
+
 func storedProject(request Request) state.Project {
 	return request.projectState()
 }
@@ -280,7 +288,7 @@ func TestUpRejectsRepositoryOnlyMountScope(t *testing.T) {
 func TestStopHandlesOwnedMachineStatesAndFailures(t *testing.T) {
 	t.Parallel()
 
-	machineName := validRequest().MachineName
+	target := validTarget()
 	tests := []struct {
 		name    string
 		manager Manager
@@ -353,7 +361,10 @@ func TestStopHandlesOwnedMachineStatesAndFailures(t *testing.T) {
 					{output: []byte(`[{"id":"isolated-dev-app-abcd1234","status":"running"}]`)},
 					{output: []byte("busy"), err: errors.New("exit 1")},
 				}},
-				StateStore: &stateStoreStub{project: state.Project{MachineName: machineName}},
+				StateStore: &stateStoreStub{project: state.Project{
+					ProjectPath: target.ProjectPath,
+					MachineName: target.MachineName,
+				}},
 			},
 			want:  "stop machine",
 			calls: 2,
@@ -365,7 +376,10 @@ func TestStopHandlesOwnedMachineStatesAndFailures(t *testing.T) {
 					{output: []byte(`[{"id":"isolated-dev-app-abcd1234","status":"running"}]`)},
 					{},
 				}},
-				StateStore: &stateStoreStub{project: state.Project{MachineName: machineName}},
+				StateStore: &stateStoreStub{project: state.Project{
+					ProjectPath: target.ProjectPath,
+					MachineName: target.MachineName,
+				}},
 			},
 			calls: 2,
 		},
@@ -375,11 +389,11 @@ func TestStopHandlesOwnedMachineStatesAndFailures(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			name := machineName
+			operationTarget := target
 			if test.name == "invalid name" {
-				name = "../unsafe"
+				operationTarget.MachineName = "../unsafe"
 			}
-			err := test.manager.Stop(context.Background(), name)
+			err := test.manager.Stop(context.Background(), operationTarget)
 			if test.want == "" && err != nil {
 				t.Fatalf("Stop() error = %v", err)
 			}
@@ -399,39 +413,45 @@ func TestStopHandlesOwnedMachineStatesAndFailures(t *testing.T) {
 func TestDestroyHandlesCleanupFailures(t *testing.T) {
 	t.Parallel()
 
-	machineName := validRequest().MachineName
+	target := validTarget()
 	tests := []struct {
 		name      string
 		manager   Manager
-		target    string
+		target    Target
 		want      string
 		wantCalls int
 	}{
 		{
 			name:    "missing runner",
 			manager: Manager{StateStore: &stateStoreStub{}},
-			target:  machineName,
+			target:  target,
 			want:    "runner",
 		},
 		{
 			name:    "missing store",
 			manager: Manager{Runner: &runnerStub{}},
-			target:  machineName,
+			target:  target,
 			want:    "state store",
 		},
 		{
 			name:    "invalid name",
 			manager: Manager{Runner: &runnerStub{}, StateStore: &stateStoreStub{}},
-			target:  "../unsafe",
-			want:    "invalid machine name",
+			target: Target{
+				ProjectPath: target.ProjectPath,
+				MachineName: "../unsafe",
+			},
+			want: "invalid machine name",
 		},
 		{
 			name: "absent machine deletes stale state",
 			manager: Manager{
-				Runner:     &runnerStub{responses: []response{{output: []byte("[]")}}},
-				StateStore: &stateStoreStub{},
+				Runner: &runnerStub{responses: []response{{output: []byte("[]")}}},
+				StateStore: &stateStoreStub{project: state.Project{
+					ProjectPath: target.ProjectPath,
+					MachineName: target.MachineName,
+				}},
 			},
-			target:    machineName,
+			target:    target,
 			wantCalls: 1,
 		},
 		{
@@ -443,9 +463,12 @@ func TestDestroyHandlesCleanupFailures(t *testing.T) {
 					{output: []byte(`[{"id":"isolated-dev-app-abcd1234","status":"unknown"}]`)},
 					{},
 				}},
-				StateStore: &stateStoreStub{project: state.Project{MachineName: machineName}},
+				StateStore: &stateStoreStub{project: state.Project{
+					ProjectPath: target.ProjectPath,
+					MachineName: target.MachineName,
+				}},
 			},
-			target:    machineName,
+			target:    target,
 			wantCalls: 2,
 		},
 		{
@@ -456,9 +479,12 @@ func TestDestroyHandlesCleanupFailures(t *testing.T) {
 					{output: []byte("busy"), err: errors.New("exit 1")},
 					{},
 				}},
-				StateStore: &stateStoreStub{project: state.Project{MachineName: machineName}},
+				StateStore: &stateStoreStub{project: state.Project{
+					ProjectPath: target.ProjectPath,
+					MachineName: target.MachineName,
+				}},
 			},
-			target:    machineName,
+			target:    target,
 			wantCalls: 3,
 		},
 		{
@@ -469,9 +495,12 @@ func TestDestroyHandlesCleanupFailures(t *testing.T) {
 					{output: []byte("busy"), err: errors.New("exit 1")},
 					{output: []byte("machine is running"), err: errors.New("exit 1")},
 				}},
-				StateStore: &stateStoreStub{project: state.Project{MachineName: machineName}},
+				StateStore: &stateStoreStub{project: state.Project{
+					ProjectPath: target.ProjectPath,
+					MachineName: target.MachineName,
+				}},
 			},
-			target:    machineName,
+			target:    target,
 			want:      "delete machine",
 			wantCalls: 3,
 		},
@@ -482,9 +511,12 @@ func TestDestroyHandlesCleanupFailures(t *testing.T) {
 					{output: []byte(`[{"id":"isolated-dev-app-abcd1234","status":"stopped"}]`)},
 					{output: []byte("busy"), err: errors.New("exit 1")},
 				}},
-				StateStore: &stateStoreStub{project: state.Project{MachineName: machineName}},
+				StateStore: &stateStoreStub{project: state.Project{
+					ProjectPath: target.ProjectPath,
+					MachineName: target.MachineName,
+				}},
 			},
-			target:    machineName,
+			target:    target,
 			want:      "delete machine",
 			wantCalls: 2,
 		},
@@ -494,9 +526,15 @@ func TestDestroyHandlesCleanupFailures(t *testing.T) {
 				Runner: &runnerStub{responses: []response{
 					{output: []byte("[]")},
 				}},
-				StateStore: &stateStoreStub{deleteErr: errors.New("disk error")},
+				StateStore: &stateStoreStub{
+					project: state.Project{
+						ProjectPath: target.ProjectPath,
+						MachineName: target.MachineName,
+					},
+					deleteErr: errors.New("disk error"),
+				},
 			},
-			target:    machineName,
+			target:    target,
 			want:      "delete project state",
 			wantCalls: 1,
 		},
@@ -508,9 +546,12 @@ func TestDestroyHandlesCleanupFailures(t *testing.T) {
 					{},
 					{},
 				}},
-				StateStore: &stateStoreStub{project: state.Project{MachineName: machineName}},
+				StateStore: &stateStoreStub{project: state.Project{
+					ProjectPath: target.ProjectPath,
+					MachineName: target.MachineName,
+				}},
 			},
-			target:    machineName,
+			target:    target,
 			wantCalls: 3,
 		},
 	}
