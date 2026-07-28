@@ -111,8 +111,10 @@ SSH agent.
 
 Only public keys ever reach the machine. `up` collects `~/.ssh/*.pub` on macOS,
 rejects any file containing private key material, and installs the result as
-the guest user's `authorized_keys`. If no public key exists, `up` stops before
-creating or starting a machine:
+the guest user's `authorized_keys`. Entries it cannot use as login keys — an
+SSH-CA certificate, for example, which OpenSSH requires to sit beside the key
+it certifies — are skipped, leaving the valid keys next to them intact. If no
+usable public key exists, `up` stops before creating or starting a machine:
 
 ```sh
 ssh-keygen -t ed25519

@@ -28,6 +28,12 @@ const noPublicKeyGuidance = "no SSH public key found in %s; create one with `ssh
 // PublicKeys collects the authorized login keys for the guest user from the
 // host SSH directory. Only `.pub` files are read, and each entry is validated
 // as public material before it leaves the host.
+//
+// An entry this tool cannot use is skipped rather than failing the whole scan:
+// `~/.ssh` legitimately holds `.pub` files that are not login keys — an SSH-CA
+// certificate must sit beside the key it certifies — and one of those must not
+// cost the user every valid key next to it. Private material remains a hard
+// failure, and a scan that yields nothing usable still errors.
 func PublicKeys(sshDir string) ([]string, error) {
 	matches, err := filepath.Glob(filepath.Join(sshDir, "*.pub"))
 	if err != nil {
@@ -36,11 +42,15 @@ func PublicKeys(sshDir string) ([]string, error) {
 	sort.Strings(matches)
 
 	var keys []string
+	var skipped []string
 	seen := make(map[string]struct{}, len(matches))
 	for _, path := range matches {
-		fileKeys, err := publicKeysFromFile(path)
+		fileKeys, unusable, err := publicKeysFromFile(path)
 		if err != nil {
 			return nil, err
+		}
+		if unusable {
+			skipped = append(skipped, filepath.Base(path))
 		}
 		for _, key := range fileKeys {
 			if _, duplicate := seen[key]; duplicate {
@@ -51,35 +61,48 @@ func PublicKeys(sshDir string) ([]string, error) {
 		}
 	}
 	if len(keys) == 0 {
+		if len(skipped) > 0 {
+			return nil, fmt.Errorf(
+				noPublicKeyGuidance+"; ignored unusable entries in %s",
+				sshDir,
+				strings.Join(skipped, ", "),
+			)
+		}
 		return nil, fmt.Errorf(noPublicKeyGuidance, sshDir)
 	}
 	return keys, nil
 }
 
-func publicKeysFromFile(path string) ([]string, error) {
+// publicKeysFromFile returns the usable entries of one `.pub` file and reports
+// whether any entry was skipped, so the caller can name the file if nothing
+// usable survives the whole scan. Only the file name is ever reported: a
+// rejected entry's own bytes never reach an error message.
+func publicKeysFromFile(path string) ([]string, bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read public key %s: %w", filepath.Base(path), err)
+		return nil, false, fmt.Errorf("read public key %s: %w", filepath.Base(path), err)
 	}
 	if strings.Contains(string(data), "PRIVATE KEY") {
-		return nil, fmt.Errorf(
+		return nil, false, fmt.Errorf(
 			"%s contains private key material; isolated-dev never copies private keys into the machine",
 			filepath.Base(path),
 		)
 	}
 
 	var keys []string
+	unusable := false
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		if err := validatePublicKey(line); err != nil {
-			return nil, fmt.Errorf("%s: %w", filepath.Base(path), err)
+			unusable = true
+			continue
 		}
 		keys = append(keys, line)
 	}
-	return keys, nil
+	return keys, unusable, nil
 }
 
 func validatePublicKey(key string) error {

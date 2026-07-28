@@ -1,6 +1,7 @@
 package guest
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -79,6 +80,9 @@ func TestNewIdentityRejectsUnusableHostIdentities(t *testing.T) {
 func TestResolveIdentityMatchesTheInvokingHostUser(t *testing.T) {
 	t.Parallel()
 
+	if os.Geteuid() == 0 {
+		t.Skip("ResolveIdentity deliberately rejects a root host user")
+	}
 	identity, err := ResolveIdentity()
 	if err != nil {
 		t.Fatalf("ResolveIdentity() error = %v", err)

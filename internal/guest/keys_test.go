@@ -107,10 +107,95 @@ func TestPublicKeysRejectsUnusableEntries(t *testing.T) {
 			sshDir := t.TempDir()
 			writeFile(t, filepath.Join(sshDir, "id_ed25519.pub"), test.content)
 
-			if keys, err := PublicKeys(sshDir); err == nil {
+			keys, err := PublicKeys(sshDir)
+			if err == nil {
 				t.Fatalf("PublicKeys() = %#v, want an error", keys)
 			}
+			// Nothing usable survived, so the actionable guidance stands — and
+			// it names the file whose entries were skipped.
+			if !strings.Contains(err.Error(), "ssh-keygen") {
+				t.Errorf("PublicKeys() error = %v, want actionable ssh-keygen guidance", err)
+			}
+			if !strings.Contains(err.Error(), "id_ed25519.pub") {
+				t.Errorf("PublicKeys() error = %v, want the skipped file named", err)
+			}
 		})
+	}
+}
+
+// An unusable `.pub` file must not cost the user the valid keys beside it. An
+// SSH-CA certificate is the case that bites: OpenSSH requires it to live next
+// to the key it certifies, so its owner has no host-side workaround.
+func TestPublicKeysSkipsUnusableEntriesBesideValidKeys(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		fileName string
+		content  string
+	}{
+		{
+			name:     "ssh certificate authority certificate",
+			fileName: "id_ed25519-cert.pub",
+			content: "ssh-ed25519-cert-v01@openssh.com " +
+				"AAAAIHNzaC1lZDI1NTE5LWNlcnQ= fx@mac\n",
+		},
+		{name: "unknown algorithm", fileName: "legacy.pub", content: "ssh-dss AAAAB3NzaC1kc3M= fx@mac\n"},
+		{name: "not a key entry at all", fileName: "notes.pub", content: "just some text\n"},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			sshDir := t.TempDir()
+			writeFile(t, filepath.Join(sshDir, "id_ed25519.pub"), ed25519Key+"\n")
+			writeFile(t, filepath.Join(sshDir, test.fileName), test.content)
+
+			keys, err := PublicKeys(sshDir)
+			if err != nil {
+				t.Fatalf("PublicKeys() error = %v, want the valid key beside %s", err, test.fileName)
+			}
+			if len(keys) != 1 || keys[0] != ed25519Key {
+				t.Fatalf("keys = %#v, want only the usable ed25519 key", keys)
+			}
+		})
+	}
+}
+
+// A skipped entry within an otherwise usable file must not take the rest of
+// that file down with it.
+func TestPublicKeysSkipsUnusableEntriesWithinAFile(t *testing.T) {
+	t.Parallel()
+
+	sshDir := t.TempDir()
+	writeFile(
+		t,
+		filepath.Join(sshDir, "authorized.pub"),
+		"ssh-dss AAAAB3NzaC1kc3M= fx@mac\n"+ed25519Key+"\n",
+	)
+
+	keys, err := PublicKeys(sshDir)
+	if err != nil {
+		t.Fatalf("PublicKeys() error = %v", err)
+	}
+	if len(keys) != 1 || keys[0] != ed25519Key {
+		t.Fatalf("keys = %#v, want only the usable ed25519 key", keys)
+	}
+}
+
+// Skipping must never soften the private-key guarantee: a private key beside a
+// valid public key still fails the whole scan.
+func TestPublicKeysStillRejectsPrivateMaterialBesideAValidKey(t *testing.T) {
+	t.Parallel()
+
+	sshDir := t.TempDir()
+	writeFile(t, filepath.Join(sshDir, "id_ed25519.pub"), ed25519Key+"\n")
+	writeFile(t, filepath.Join(sshDir, "leaked.pub"), privateKeyHeader+"\nb3BlbnNzaC1rZXk=\n")
+
+	keys, err := PublicKeys(sshDir)
+	if err == nil || !strings.Contains(err.Error(), "never copies private keys") {
+		t.Fatalf("PublicKeys() = %#v, error = %v, want the private-key rejection", keys, err)
 	}
 }
 
