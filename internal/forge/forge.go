@@ -224,6 +224,17 @@ func (acceptance Acceptance) perform(
 	if err := acceptance.awaitServices(ctx, request, result); err != nil {
 		return err
 	}
+	return acceptance.reachEndpoints(ctx, request, result)
+}
+
+// reachEndpoints proves the declared macOS ports answer through the managed
+// tunnel. It is the step that leaves the host, so it is also what a persistence
+// run repeats to show the ports followed the machine's lifecycle.
+func (acceptance Acceptance) reachEndpoints(
+	ctx context.Context,
+	request Request,
+	result *Result,
+) error {
 	forwards, err := acceptance.verifyTunnel(request)
 	if err != nil {
 		return err
