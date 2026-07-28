@@ -111,6 +111,16 @@ go run ./cmd/isolated-dev --version
 go run ./cmd/isolated-dev status .
 ```
 
+Run the destructive host-backed lifecycle test only on a disposable Apple
+Container development host. It creates and removes one uniquely named project
+machine and verifies package, image, Compose-volume, guest, and mounted-project
+data across stop and restart:
+
+```sh
+ISOLATED_DEV_RUN_HOST_TESTS=1 go test ./internal/machine \
+  -run TestHostLifecyclePersistsProjectMachineData -count=1 -v
+```
+
 `status` is read-only. It validates the canonical Git repository path and host
 prerequisites, then reports effective resources and the project machine,
 base-image, mount, and tunnel state without displaying secret references.

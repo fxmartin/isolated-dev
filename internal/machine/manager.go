@@ -109,6 +109,9 @@ func (manager Manager) Up(ctx context.Context, request Request) (UpResult, error
 			}
 		}
 		if err := manager.create(ctx, request); err != nil {
+			if reconcileErr := manager.reconcileFailedCreate(ctx, request.MachineName); reconcileErr != nil {
+				return UpResult{}, errors.Join(err, reconcileErr)
+			}
 			return UpResult{}, err
 		}
 		created = true
@@ -299,6 +302,20 @@ func (manager Manager) create(ctx context.Context, request Request) error {
 	)
 	if err != nil {
 		return fmt.Errorf("create machine %q: %w\n%s", request.MachineName, err, output)
+	}
+	return nil
+}
+
+func (manager Manager) reconcileFailedCreate(ctx context.Context, machineName string) error {
+	_, exists, err := manager.find(ctx, machineName)
+	if err != nil {
+		return fmt.Errorf("reconcile failed machine creation: %w", err)
+	}
+	if exists {
+		return nil
+	}
+	if err := manager.StateStore.Delete(machineName); err != nil {
+		return fmt.Errorf("remove project state after failed machine creation: %w", err)
 	}
 	return nil
 }

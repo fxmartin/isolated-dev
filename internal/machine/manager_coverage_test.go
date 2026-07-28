@@ -170,6 +170,7 @@ func TestUpReportsLifecycleFailures(t *testing.T) {
 			runner: &runnerStub{responses: []response{
 				{output: []byte("[]")},
 				{output: []byte("create failed"), err: errors.New("exit 1")},
+				{output: []byte("[]")},
 			}},
 			store:   &stateStoreStub{loadErr: state.ErrNotFound},
 			waiter:  &dockerWaiterStub{},

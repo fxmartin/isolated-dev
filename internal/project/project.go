@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode"
 )
 
 type Project struct {
@@ -56,7 +55,8 @@ func slugify(value string) string {
 	var result strings.Builder
 	previousHyphen := false
 	for _, character := range strings.ToLower(value) {
-		if unicode.IsLetter(character) || unicode.IsDigit(character) {
+		if (character >= 'a' && character <= 'z') ||
+			(character >= '0' && character <= '9') {
 			result.WriteRune(character)
 			previousHyphen = false
 			continue

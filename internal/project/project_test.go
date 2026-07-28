@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 func TestResolveCanonicalizesPathAndBuildsStableMachineName(t *testing.T) {
@@ -64,6 +65,25 @@ func TestResolveAvoidsSameBasenameCollision(t *testing.T) {
 
 	if firstProject.MachineName == secondProject.MachineName {
 		t.Fatalf("MachineName collision = %q", firstProject.MachineName)
+	}
+}
+
+func TestResolveBuildsASCIISafeMachineNameFromUnicodeRepository(t *testing.T) {
+	t.Parallel()
+
+	repository := makeRepository(t, filepath.Join(t.TempDir(), "café-日本語"))
+
+	resolved, err := Resolve(repository)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if got, wantPrefix := resolved.MachineName, "isolated-dev-caf-"; !strings.HasPrefix(got, wantPrefix) {
+		t.Fatalf("MachineName = %q, want prefix %q", got, wantPrefix)
+	}
+	for _, character := range resolved.MachineName {
+		if character > unicode.MaxASCII {
+			t.Fatalf("MachineName = %q, contains non-ASCII character %q", resolved.MachineName, character)
+		}
 	}
 }
 

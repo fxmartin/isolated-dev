@@ -177,6 +177,59 @@ func TestUpDoesNotRecordStateWhenBaseImageEnsureFails(t *testing.T) {
 	}
 }
 
+func TestUpRemovesNewStateWhenCreateFailsWithoutMachine(t *testing.T) {
+	t.Parallel()
+
+	request := validRequest()
+	runner := &runnerStub{responses: []response{
+		{output: []byte("[]")},
+		{output: []byte("create failed"), err: errors.New("exit 1")},
+		{output: []byte("[]")},
+	}}
+	store := &stateStoreStub{loadErr: state.ErrNotFound}
+	manager := Manager{
+		Runner:       runner,
+		StateStore:   store,
+		DockerWaiter: &dockerWaiterStub{},
+	}
+
+	_, err := manager.Up(context.Background(), request)
+	if err == nil || !strings.Contains(err.Error(), "create machine") {
+		t.Fatalf("Up() error = %v, want create failure", err)
+	}
+	if !reflect.DeepEqual(store.deleted, []string{request.MachineName}) {
+		t.Fatalf("deleted state = %#v, want failed creation state removed", store.deleted)
+	}
+	if len(runner.calls) != 3 {
+		t.Fatalf("runner calls = %+v, want lookup, create, and reconciliation lookup", runner.calls)
+	}
+}
+
+func TestUpRetainsOwnershipStateWhenCreatePartiallyProducesMachine(t *testing.T) {
+	t.Parallel()
+
+	request := validRequest()
+	runner := &runnerStub{responses: []response{
+		{output: []byte("[]")},
+		{output: []byte("create failed"), err: errors.New("exit 1")},
+		{output: []byte(`[{"id":"isolated-dev-app-abcd1234","status":"unknown"}]`)},
+	}}
+	store := &stateStoreStub{loadErr: state.ErrNotFound}
+	manager := Manager{
+		Runner:       runner,
+		StateStore:   store,
+		DockerWaiter: &dockerWaiterStub{},
+	}
+
+	_, err := manager.Up(context.Background(), request)
+	if err == nil || !strings.Contains(err.Error(), "create machine") {
+		t.Fatalf("Up() error = %v, want create failure", err)
+	}
+	if len(store.deleted) != 0 {
+		t.Fatalf("deleted state = %#v, want ownership retained for partial machine", store.deleted)
+	}
+}
+
 func TestUpRejectsImmutableConfigurationDrift(t *testing.T) {
 	t.Parallel()
 
