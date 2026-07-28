@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 )
+
+var environmentNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 const (
 	SharedFileName     = ".isolated-dev.toml"
@@ -194,6 +197,34 @@ func validate(cfg Config) error {
 	for name, command := range cfg.Commands {
 		if strings.TrimSpace(name) == "" || len(command.Args) == 0 {
 			return fmt.Errorf("commands.%s.args: must not be empty", name)
+		}
+	}
+	return validateSecrets(cfg.Secrets)
+}
+
+// validateSecrets keeps secret references pointing inside the mounted project
+// and keeps inline values out. Its errors never echo the offending value,
+// because a rejected entry may itself be a secret.
+func validateSecrets(secrets SecretReferences) error {
+	for index, path := range secrets.Files {
+		field := fmt.Sprintf("secrets.files[%d]", index)
+		if strings.TrimSpace(path) == "" {
+			return fmt.Errorf("%s: must not be empty", field)
+		}
+		if filepath.IsAbs(path) {
+			return fmt.Errorf("%s: must be a project-relative path", field)
+		}
+		cleaned := filepath.Clean(path)
+		if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("%s: must stay inside the project", field)
+		}
+	}
+	for index, name := range secrets.Environment {
+		if !environmentNamePattern.MatchString(name) {
+			return fmt.Errorf(
+				"secrets.environment[%d]: must be an environment variable name, not a value",
+				index,
+			)
 		}
 	}
 	return nil

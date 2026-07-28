@@ -7,6 +7,7 @@ import (
 	"github.com/fxmartin/isolated-dev/internal/app"
 	"github.com/fxmartin/isolated-dev/internal/baseimage"
 	"github.com/fxmartin/isolated-dev/internal/cli"
+	"github.com/fxmartin/isolated-dev/internal/guest"
 	"github.com/fxmartin/isolated-dev/internal/host"
 	"github.com/fxmartin/isolated-dev/internal/machine"
 	"github.com/fxmartin/isolated-dev/internal/state"
@@ -29,11 +30,12 @@ func main() {
 		ImageEnsurer: imageManager,
 	}
 	application := app.App{
-		Version:        version,
-		HostChecker:    host.DefaultChecker(),
-		StateStore:     store,
-		MachineManager: machineManager,
-		WarningOutput:  os.Stderr,
+		Version:          version,
+		HostChecker:      host.DefaultChecker(),
+		StateStore:       store,
+		MachineManager:   machineManager,
+		GuestProvisioner: guest.Provisioner{Runner: runner},
+		WarningOutput:    os.Stderr,
 	}
 	os.Exit(cli.Run(os.Args[1:], cli.Dependencies{
 		Stdout:  os.Stdout,

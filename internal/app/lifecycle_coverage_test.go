@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fxmartin/isolated-dev/internal/guest"
 	"github.com/fxmartin/isolated-dev/internal/host"
 	"github.com/fxmartin/isolated-dev/internal/project"
 	"github.com/fxmartin/isolated-dev/internal/state"
@@ -35,13 +36,13 @@ func TestUpReportsBoundaryFailures(t *testing.T) {
 	tests := []struct {
 		name        string
 		projectPath func(*testing.T) string
-		application func(*testing.T) App
+		application func(*testing.T, string) App
 		want        string
 	}{
 		{
 			name:        "project resolution",
 			projectPath: func(*testing.T) string { return "" },
-			application: func(*testing.T) App { return App{} },
+			application: func(*testing.T, string) App { return App{} },
 			want:        "project path",
 		},
 		{
@@ -57,33 +58,70 @@ func TestUpReportsBoundaryFailures(t *testing.T) {
 				}
 				return repository
 			},
-			application: func(*testing.T) App { return App{} },
+			application: func(*testing.T, string) App { return App{} },
 			want:        "unsupported value",
 		},
 		{
 			name:        "host prerequisites",
 			projectPath: appRepository,
-			application: func(*testing.T) App { return App{HostChecker: failingHostChecker()} },
+			application: func(*testing.T, string) App { return App{HostChecker: failingHostChecker()} },
 			want:        "not configured",
 		},
 		{
 			name:        "missing lifecycle",
 			projectPath: appRepository,
-			application: func(*testing.T) App { return App{HostChecker: passingHostChecker()} },
+			application: func(*testing.T, string) App { return App{HostChecker: passingHostChecker()} },
 			want:        "lifecycle is not configured",
+		},
+		{
+			name:        "missing guest provisioning",
+			projectPath: appRepository,
+			application: func(*testing.T, string) App {
+				return App{HostChecker: passingHostChecker(), MachineManager: &lifecycleStub{}}
+			},
+			want: "guest provisioning is not configured",
+		},
+		{
+			name:        "guest identity",
+			projectPath: appRepository,
+			application: func(t *testing.T, path string) App {
+				application := upApp(t, filepath.Dir(path), path, &lifecycleStub{})
+				application.ResolveIdentity = func() (guest.Identity, error) {
+					return guest.Identity{}, errors.New("no macOS user")
+				}
+				return application
+			},
+			want: "no macOS user",
 		},
 		{
 			name:        "manager failure",
 			projectPath: appRepository,
-			application: func(*testing.T) App {
-				return App{
-					HostChecker: passingHostChecker(),
-					MachineManager: &lifecycleStub{
-						upErr: errors.New("machine create failed"),
-					},
-				}
+			application: func(t *testing.T, path string) App {
+				return upApp(t, filepath.Dir(path), path, &lifecycleStub{
+					upErr: errors.New("machine create failed"),
+				})
 			},
 			want: "machine create failed",
+		},
+		{
+			name:        "guest provisioning failure",
+			projectPath: appRepository,
+			application: func(t *testing.T, path string) App {
+				application := upApp(t, filepath.Dir(path), path, &lifecycleStub{})
+				application.GuestProvisioner = &guestStub{err: errors.New("useradd failed")}
+				return application
+			},
+			want: "useradd failed",
+		},
+		{
+			name:        "guest state record",
+			projectPath: appRepository,
+			application: func(t *testing.T, path string) App {
+				application := upApp(t, filepath.Dir(path), path, &lifecycleStub{})
+				application.StateStore = state.Store{Root: t.TempDir()}
+				return application
+			},
+			want: "load project state",
 		},
 	}
 
@@ -92,8 +130,8 @@ func TestUpReportsBoundaryFailures(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			path := test.projectPath(t)
-			application := test.application(t)
-			if path != "" {
+			application := test.application(t, path)
+			if path != "" && application.HomeDir == "" {
 				application.HomeDir = filepath.Dir(path)
 			}
 			err := application.Up(context.Background(), path, io.Discard)
@@ -116,10 +154,8 @@ func TestUpFallsBackToTheOperatingSystemHomeDirectory(t *testing.T) {
 
 	lifecycle := &lifecycleStub{upExisting: true}
 	var summary bytes.Buffer
-	application := App{
-		HostChecker:    passingHostChecker(),
-		MachineManager: lifecycle,
-	}
+	application := upApp(t, home, repository, lifecycle)
+	application.HomeDir = ""
 
 	if err := application.Up(context.Background(), repository, &summary); err != nil {
 		t.Fatalf("Up() error = %v", err)
@@ -134,13 +170,12 @@ func TestUpFallsBackToTheOperatingSystemHomeDirectory(t *testing.T) {
 
 func TestUpRejectsRepositoryOutsideTheOperatingSystemHome(t *testing.T) {
 	repository := appRepository(t)
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 
 	lifecycle := &lifecycleStub{}
-	application := App{
-		HostChecker:    passingHostChecker(),
-		MachineManager: lifecycle,
-	}
+	application := upApp(t, home, repository, lifecycle)
+	application.HomeDir = ""
 
 	err := application.Up(context.Background(), repository, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "outside the mounted home directory") {
@@ -157,6 +192,21 @@ func (failingWriter) Write([]byte) (int, error) {
 	return 0, errors.New("broken pipe")
 }
 
+// writeAfter fails only once earlier lines have been written, which isolates
+// the second write of a two-line report.
+type writeAfter struct {
+	failAfter int
+	written   int
+}
+
+func (writer *writeAfter) Write(data []byte) (int, error) {
+	writer.written++
+	if writer.written > writer.failAfter {
+		return 0, errors.New("broken pipe")
+	}
+	return len(data), nil
+}
+
 func TestUpReportsOutputFailures(t *testing.T) {
 	t.Parallel()
 
@@ -164,6 +214,7 @@ func TestUpReportsOutputFailures(t *testing.T) {
 		name          string
 		warningOutput io.Writer
 		output        io.Writer
+		ownership     bool
 		want          string
 	}{
 		{
@@ -173,9 +224,21 @@ func TestUpReportsOutputFailures(t *testing.T) {
 			want:          "write full-home mount warning",
 		},
 		{
+			name:          "ownership warning",
+			warningOutput: &writeAfter{failAfter: 1},
+			output:        io.Discard,
+			ownership:     true,
+			want:          "write mount ownership warning",
+		},
+		{
 			name:   "summary",
 			output: failingWriter{},
 			want:   "write up summary",
+		},
+		{
+			name:   "guest summary",
+			output: &writeAfter{failAfter: 1},
+			want:   "write guest summary",
 		},
 	}
 
@@ -184,12 +247,9 @@ func TestUpReportsOutputFailures(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			repository := appRepository(t)
-			application := App{
-				HostChecker:    passingHostChecker(),
-				MachineManager: &lifecycleStub{},
-				HomeDir:        filepath.Dir(repository),
-				WarningOutput:  test.warningOutput,
-			}
+			application := upApp(t, filepath.Dir(repository), repository, &lifecycleStub{})
+			application.WarningOutput = test.warningOutput
+			application.GuestProvisioner = &guestStub{ownershipMissing: test.ownership}
 
 			err := application.Up(context.Background(), repository, test.output)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
@@ -464,5 +524,48 @@ func TestImageVersion(t *testing.T) {
 		if got := imageVersion(reference); got != want {
 			t.Errorf("imageVersion(%q) = %q, want %q", reference, got, want)
 		}
+	}
+}
+
+// Destroy is the most damaging command, so it runs the same resolve, host, and
+// configuration checks as the other mutating commands before touching anything.
+func TestDestroyReportsMutationBoundaryFailures(t *testing.T) {
+	t.Parallel()
+
+	repository := appRepository(t)
+	tests := []struct {
+		name        string
+		path        string
+		application App
+		want        string
+	}{
+		{
+			name: "resolve",
+			path: "",
+			want: "project path",
+		},
+		{
+			name:        "host",
+			path:        repository,
+			application: App{HostChecker: failingHostChecker()},
+			want:        "not configured",
+		},
+		{
+			name:        "manager missing",
+			path:        repository,
+			application: App{HostChecker: passingHostChecker()},
+			want:        "lifecycle is not configured",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := test.application.Destroy(context.Background(), test.path)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Destroy() error = %v, want containing %q", err, test.want)
+			}
+		})
 	}
 }

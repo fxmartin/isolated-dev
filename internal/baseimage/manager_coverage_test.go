@@ -150,3 +150,50 @@ func TestWaitDockerUsesDefaultsAndHonorsCancellation(t *testing.T) {
 		}
 	})
 }
+
+// Only a managed base image may be granted read-write access to the full home
+// directory, so recognition must reject look-alike references.
+func TestIsManagedReference(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		reference string
+		want      bool
+	}{
+		{reference: "local/isolated-dev-base:1", want: true},
+		{reference: "local/isolated-dev-base:1.2.3-rc1", want: true},
+		{reference: "ubuntu:24.04"},
+		{reference: "docker.io/local/isolated-dev-base:1"},
+		{reference: "local/isolated-dev-base"},
+		{reference: "local/isolated-dev-base:"},
+		{reference: "local/isolated-dev-base:../escape"},
+		{reference: "local/isolated-dev-base:.hidden"},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.reference, func(t *testing.T) {
+			t.Parallel()
+			if got := IsManagedReference(test.reference); got != test.want {
+				t.Fatalf("IsManagedReference(%q) = %t, want %t", test.reference, got, test.want)
+			}
+		})
+	}
+}
+
+// The managed prefix alone is not enough: the version that follows it becomes a
+// build tag, so an unsafe one must be rejected before any build runs.
+func TestEnsureReferenceRejectsAnUnsafeManagedVersion(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{}
+	manager := Manager{Runner: runner}
+
+	err := manager.EnsureReference(context.Background(), "local/isolated-dev-base:../escape")
+	if err == nil || !strings.Contains(err.Error(), "invalid base-image version") {
+		t.Fatalf("EnsureReference() error = %v, want an invalid version failure", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("calls = %+v, want no build command", runner.calls)
+	}
+}

@@ -39,6 +39,54 @@ func TestStoreSavesAndLoadsProjectState(t *testing.T) {
 	}
 }
 
+// Machines created before guest provisioning existed have no guest fields;
+// their state must still decode and must not report a fabricated identity.
+func TestStoreRoundTripsGuestIdentityAndToleratesItsAbsence(t *testing.T) {
+	t.Parallel()
+
+	store := Store{Root: t.TempDir()}
+	want := Project{
+		SchemaVersion:    1,
+		ProjectPath:      "/Users/fx/dev/app",
+		MachineName:      "isolated-dev-app-abcd1234",
+		BaseImage:        "isolated-dev-base:1",
+		BaseImageVersion: "1",
+		MountScope:       "home",
+		GuestUser:        "fx",
+		GuestUID:         501,
+		GuestGID:         20,
+		GuestProjectPath: "/Users/fx/dev/app",
+	}
+	if err := store.Save(want); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	got, err := store.Load(want.MachineName)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("Load() = %+v, want %+v", got, want)
+	}
+
+	legacy := `{"schema_version":1,"project_path":"/Users/fx/dev/app",` +
+		`"machine_name":"isolated-dev-legacy","base_image":"isolated-dev-base:1",` +
+		`"base_image_version":"1","mount_scope":"home","cpus":4,"memory_gb":8}`
+	if err := os.WriteFile(
+		filepath.Join(store.Root, "isolated-dev-legacy.json"),
+		[]byte(legacy),
+		0o600,
+	); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	loaded, err := store.Load("isolated-dev-legacy")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.GuestUser != "" || loaded.GuestUID != 0 || loaded.GuestProjectPath != "" {
+		t.Errorf("legacy state = %+v, want no guest identity", loaded)
+	}
+}
+
 func TestStoreDeleteIsIdempotent(t *testing.T) {
 	t.Parallel()
 

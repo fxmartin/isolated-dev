@@ -54,3 +54,47 @@ func TestWriteOmitsSecretReferencesAndValues(t *testing.T) {
 		t.Fatalf("status output presented unsupported disk allocation:\n%s", got)
 	}
 }
+
+func TestWriteReportsGuestIdentityAndMountedProject(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	if err := Write(&output, Snapshot{
+		GuestUser:        "fx",
+		GuestUID:         501,
+		GuestGID:         20,
+		GuestProjectPath: "/Users/fx/dev/app",
+		Config:           config.Config{Resources: config.Resources{CPUs: 4, MemoryGB: 8}},
+	}); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	got := output.String()
+	for _, expected := range []string{
+		"Guest user: fx (501:20)",
+		"Guest project: /Users/fx/dev/app",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Errorf("status output missing %q:\n%s", expected, got)
+		}
+	}
+}
+
+func TestWriteReportsAnUnprovisionedGuest(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	if err := Write(&output, Snapshot{}); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	got := output.String()
+	for _, expected := range []string{
+		"Guest user: not-provisioned",
+		"Guest project: not-provisioned",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Errorf("status output missing %q:\n%s", expected, got)
+		}
+	}
+}
