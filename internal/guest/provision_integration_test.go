@@ -192,10 +192,16 @@ func TestHostProvisionsGuestIdentityAndCredentials(t *testing.T) {
 	)
 
 	marker := ".guest-created"
+	link := ".guest-link"
 	runInGuest(
 		t, ctx, runner, machineName,
 		"/usr/bin/su", "-", user, "-c",
-		"touch "+filepath.Join(result.GuestProjectPath, marker),
+		fmt.Sprintf(
+			"touch %[1]s && chmod 0755 %[1]s && ln -sfn %[2]s %[3]s",
+			filepath.Join(result.GuestProjectPath, marker),
+			marker,
+			filepath.Join(result.GuestProjectPath, link),
+		),
 	)
 	info, err := os.Stat(filepath.Join(repository, marker))
 	if err != nil {
@@ -203,6 +209,22 @@ func TestHostProvisionsGuestIdentityAndCredentials(t *testing.T) {
 	}
 	if info.IsDir() {
 		t.Fatalf("guest-created path %s is a directory", marker)
+	}
+	// AC4: the executable bit and the symlink must survive the mount.
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Errorf("guest-created file mode = %v, want the executable bit preserved", info.Mode().Perm())
+	}
+	linkInfo, err := os.Lstat(filepath.Join(repository, link))
+	if err != nil {
+		t.Fatalf("guest-created symlink is not visible on macOS: %v", err)
+	}
+	if linkInfo.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("guest-created path %s mode = %v, want a symlink", link, linkInfo.Mode())
+	}
+	if target, err := os.Readlink(filepath.Join(repository, link)); err != nil {
+		t.Fatalf("Readlink() error = %v", err)
+	} else if target != marker {
+		t.Errorf("symlink target = %q, want %q", target, marker)
 	}
 }
 

@@ -41,7 +41,7 @@ func TestStoreSavesAndLoadsProjectState(t *testing.T) {
 
 // Machines created before guest provisioning existed have no guest fields;
 // their state must still decode and must not report a fabricated identity.
-func TestStoreRoundTripsGuestIdentityAndTolerablesItsAbsence(t *testing.T) {
+func TestStoreRoundTripsGuestIdentityAndToleratesItsAbsence(t *testing.T) {
 	t.Parallel()
 
 	store := Store{Root: t.TempDir()}

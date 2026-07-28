@@ -59,6 +59,17 @@ func (provisioner Provisioner) Provision(
 		return Result{}, err
 	}
 
+	// The project is located before the guest is configured. Provisioning owns
+	// /home/<user> and rewrites it, so a mount that lands there has to be
+	// detected before any of those writes happen rather than after.
+	guestPath, matched, err := provisioner.locateProject(ctx, request, relativeProject)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := refuseGuestHomeMount(request.Identity.Username, guestPath); err != nil {
+		return Result{}, err
+	}
+
 	args := []string{
 		"machine", "run",
 		"--name", request.MachineName,
@@ -80,15 +91,43 @@ func (provisioner Provisioner) Provision(
 		)
 	}
 
-	guestPath, matched, err := provisioner.locateProject(ctx, request, relativeProject)
-	if err != nil {
-		return Result{}, err
-	}
 	return Result{
 		Identity:         request.Identity,
 		GuestProjectPath: guestPath,
 		OwnershipMatched: matched,
 	}, nil
+}
+
+// refuseGuestHomeMount stops provisioning when the macOS home is exposed at the
+// guest home path. provision.sh owns /home/<user>: it relaxes the directory to
+// 0755 and replaces .ssh/authorized_keys with the collected host keys. If that
+// directory is the mounted macOS home, both writes land on real host data and
+// destroy the developer's own authorized_keys, so `up` stops instead.
+func refuseGuestHomeMount(username string, guestProjectPath string) error {
+	guestHome := filepath.Join("/home", username)
+	if _, within := withinDir(guestHome, guestProjectPath); !within {
+		return nil
+	}
+	return fmt.Errorf(
+		"the project is exposed at %s, inside the guest home %s that provisioning rewrites; refusing to configure the guest because that would overwrite the macOS ~/.ssh/authorized_keys",
+		guestProjectPath,
+		guestHome,
+	)
+}
+
+// withinDir reports whether path is dir or one of its descendants, and returns
+// path relative to dir.
+func withinDir(dir string, path string) (string, bool) {
+	relative, err := filepath.Rel(dir, path)
+	if err != nil {
+		return "", false
+	}
+	if relative == ".." ||
+		strings.HasPrefix(relative, ".."+string(filepath.Separator)) ||
+		filepath.IsAbs(relative) {
+		return "", false
+	}
+	return relative, true
 }
 
 // locateProject resolves the Linux path of the mounted repository. Apple
@@ -164,13 +203,8 @@ func (provisioner Provisioner) validate(request Request) (string, error) {
 		}
 	}
 
-	relative, err := filepath.Rel(request.HomeDir, request.ProjectPath)
-	if err != nil {
-		return "", fmt.Errorf("compare project and home directories: %w", err)
-	}
-	if relative == ".." ||
-		strings.HasPrefix(relative, ".."+string(filepath.Separator)) ||
-		filepath.IsAbs(relative) {
+	relative, within := withinDir(request.HomeDir, request.ProjectPath)
+	if !within {
 		return "", fmt.Errorf(
 			"project %q is outside the mounted home directory %q",
 			request.ProjectPath,

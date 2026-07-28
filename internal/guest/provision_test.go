@@ -41,6 +41,17 @@ func (runner *fakeRunner) statTargets() []string {
 	return targets
 }
 
+// provisionCall returns the single call that runs the provisioning script,
+// which the mount probe now precedes.
+func (runner *fakeRunner) provisionCall() (recordedCall, bool) {
+	for _, call := range runner.calls {
+		if !isStat(call) {
+			return call, true
+		}
+	}
+	return recordedCall{}, false
+}
+
 func isStat(call recordedCall) bool {
 	for _, arg := range call.Args {
 		if arg == "/usr/bin/stat" {
@@ -101,10 +112,10 @@ func TestProvisionConfiguresIdentityCredentialsAndMount(t *testing.T) {
 		t.Errorf("Identity = %+v, want the requested identity", result.Identity)
 	}
 
-	if len(runner.calls) == 0 {
-		t.Fatal("no guest commands were run")
+	provision, found := runner.provisionCall()
+	if !found {
+		t.Fatal("no provisioning command was run")
 	}
-	provision := runner.calls[0]
 	if provision.Name != "container" {
 		t.Fatalf("command = %q, want the Apple Container CLI", provision.Name)
 	}
@@ -142,7 +153,10 @@ func TestProvisionConfiguresIdentityCredentialsAndMount(t *testing.T) {
 	}
 }
 
-func TestProvisionFallsBackToTheGuestHomeMountPath(t *testing.T) {
+// A mount that exposes the macOS home at the guest home path would have
+// provisioning rewrite the developer's own ~/.ssh/authorized_keys, so it is
+// refused before the guest is touched rather than discovered afterwards.
+func TestProvisionRefusesAProjectMountedInsideTheGuestHome(t *testing.T) {
 	t.Parallel()
 
 	guestPath := "/home/fxmartin/dev/app"
@@ -150,16 +164,34 @@ func TestProvisionFallsBackToTheGuestHomeMountPath(t *testing.T) {
 		guestPath + "/.git": "501:20",
 	})}
 
-	result, err := Provisioner{Runner: runner}.Provision(context.Background(), testRequest())
-	if err != nil {
-		t.Fatalf("Provision() error = %v", err)
-	}
-	if result.GuestProjectPath != guestPath {
-		t.Errorf("GuestProjectPath = %q, want %q", result.GuestProjectPath, guestPath)
+	_, err := Provisioner{Runner: runner}.Provision(context.Background(), testRequest())
+	if err == nil || !strings.Contains(err.Error(), "guest home") {
+		t.Fatalf("Provision() error = %v, want the guest home collision refused", err)
 	}
 	targets := runner.statTargets()
 	if len(targets) != 2 || targets[0] != hostProject+"/.git" {
 		t.Errorf("stat targets = %#v, want the host path probed first", targets)
+	}
+	for _, call := range runner.calls {
+		if !isStat(call) {
+			t.Fatalf("guest was configured despite the refusal: %#v", call)
+		}
+	}
+}
+
+func TestProvisionLocatesTheProjectBeforeConfiguringTheGuest(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{handle: statResponder(nil)}
+
+	_, err := Provisioner{Runner: runner}.Provision(context.Background(), testRequest())
+	if err == nil || !strings.Contains(err.Error(), "could not find the project") {
+		t.Fatalf("Provision() error = %v, want the missing project reported", err)
+	}
+	for _, call := range runner.calls {
+		if !isStat(call) {
+			t.Fatalf("guest was configured before the project was located: %#v", call)
+		}
 	}
 }
 
@@ -301,20 +333,19 @@ func TestProvisionValidatesTheRequestBeforeTouchingTheGuest(t *testing.T) {
 	}
 }
 
-func TestProvisionProbesTheProjectRelativeToTheCanonicalHome(t *testing.T) {
+// The repository may be the home directory itself, which makes the probed
+// fallback the guest home exactly — the worst case of the collision above.
+func TestProvisionRefusesAHomeRepositoryResolvedToTheGuestHome(t *testing.T) {
 	t.Parallel()
 
 	runner := &fakeRunner{handle: statResponder(map[string]string{
-		"/home/fxmartin/.git": "501:20",
+		filepath.Join("/home", "fxmartin", ".git"): "501:20",
 	})}
 	request := testRequest()
 	request.ProjectPath = hostHome
 
-	result, err := Provisioner{Runner: runner}.Provision(context.Background(), request)
-	if err != nil {
-		t.Fatalf("Provision() error = %v", err)
-	}
-	if result.GuestProjectPath != filepath.Join("/home", "fxmartin") {
-		t.Errorf("GuestProjectPath = %q, want the guest home itself", result.GuestProjectPath)
+	_, err := Provisioner{Runner: runner}.Provision(context.Background(), request)
+	if err == nil || !strings.Contains(err.Error(), "authorized_keys") {
+		t.Fatalf("Provision() error = %v, want the guest home collision refused", err)
 	}
 }

@@ -224,15 +224,19 @@ func (app App) warnMissingSecretFiles(
 	secrets config.SecretReferences,
 ) error {
 	for _, reference := range secrets.Files {
-		if _, err := os.Stat(filepath.Join(projectPath, reference)); err == nil {
+		_, err := os.Stat(filepath.Join(projectPath, reference))
+		if err == nil {
 			continue
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("check secret file reference %s: %w", reference, err)
 		}
-		if err := app.warn(
-			"warning: referenced secret file %s is not present in the project; its contents are never read",
-			reference,
-		); err != nil {
+		message := "warning: referenced secret file %s is not present in the project; its contents are never read"
+		if !errors.Is(err, os.ErrNotExist) {
+			// A reference is advisory metadata that isolated-dev never opens, so
+			// one it cannot even stat — a path under a regular file, or a
+			// directory it may not traverse — warns rather than blocking the
+			// machine from being created at all.
+			message = "warning: referenced secret file %s cannot be checked; its contents are never read"
+		}
+		if err := app.warn(message, reference); err != nil {
 			return fmt.Errorf("write secret reference warning: %w", err)
 		}
 	}

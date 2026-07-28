@@ -71,13 +71,17 @@ func TestUpReportsUnstattableSecretReferences(t *testing.T) {
 	}
 	lifecycle := &lifecycleStub{}
 	application := upApp(t, home, repository, lifecycle)
+	warnings := &strings.Builder{}
+	application.WarningOutput = warnings
 
-	err := application.Up(context.Background(), repository, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "check secret file reference") {
-		t.Fatalf("Up() error = %v, want an unreadable reference reported", err)
+	if err := application.Up(context.Background(), repository, io.Discard); err != nil {
+		t.Fatalf("Up() error = %v, want an unstattable reference to warn only", err)
 	}
-	if len(lifecycle.upRequests) != 0 {
-		t.Fatalf("up requests = %+v, want no lifecycle mutation", lifecycle.upRequests)
+	if !strings.Contains(warnings.String(), "referenced secret file .env/inner cannot be checked") {
+		t.Errorf("warnings = %q, want the unreadable reference reported", warnings.String())
+	}
+	if len(lifecycle.upRequests) != 1 {
+		t.Fatalf("up requests = %+v, want the machine still created", lifecycle.upRequests)
 	}
 }
 

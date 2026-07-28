@@ -52,8 +52,10 @@ Inline secret values and unknown fields are rejected before any host or guest
 state changes. `secrets.environment` entries must be environment variable
 names, and `secrets.files` entries must be project-relative paths that stay
 inside the repository. During `up`, a referenced file is only checked for
-existence and a missing one is reported as a warning; `isolated-dev` never
-opens, copies, or prints its contents.
+existence, and one that is missing — or that cannot be checked at all, such as
+a path nested under a regular file — is reported as a warning rather than
+blocking machine creation; `isolated-dev` never opens, copies, or prints its
+contents.
 
 The full-home fallback is restricted to versioned
 `local/isolated-dev-base:<version>` images maintained by `isolated-dev`;
@@ -132,6 +134,12 @@ guest fx (501:20) at /Users/fx/dev/app
 Both values are recorded in project state and reported by `status`. Machines
 created before guest provisioning existed report `not-provisioned` until the
 next `up`.
+
+The repository is located inside the guest before the guest user is configured.
+Provisioning owns `/home/<user>` — it sets that directory's mode and writes the
+guest `authorized_keys` — so if the home mount ever exposed the macOS home at
+that same path, `up` stops instead of overwriting the developer's own
+`~/.ssh/authorized_keys`.
 
 Stopping preserves the machine and its persistent guest data:
 

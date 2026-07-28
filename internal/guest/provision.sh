@@ -8,6 +8,13 @@
 # the authorized public keys passed as trailing arguments are installed.
 set -Eeuo pipefail
 
+# `container machine run` does not guarantee a PATH, and a bash that starts
+# without one falls back to a value that omits /usr/sbin — where groupadd,
+# useradd, usermod, userdel, and visudo live. Every other in-guest call in this
+# repository names an absolute path; this sets the search path once rather than
+# qualifying each of the commands below.
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
 username="$1"
 uid="$2"
 gid="$3"
@@ -91,11 +98,36 @@ rm -f "${sshd_tmp}"
 ssh-keygen -A >/dev/null
 /usr/sbin/sshd -t
 
+# sshd_running reports whether any sshd process is alive. /proc is read directly
+# so no extra package is required inside the guest.
+sshd_running() {
+    local comm
+    for comm in /proc/[0-9]*/comm; do
+        if [ "$(cat "${comm}" 2>/dev/null || true)" = "sshd" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# start_sshd tolerates an sshd that is already listening. Starting a second one
+# fails to bind port 22 and exits non-zero, which `set -e` would turn into a
+# failed `up` even though the drop-in installed correctly.
+start_sshd() {
+    if /usr/sbin/sshd; then
+        return 0
+    fi
+    sshd_running
+}
+
 sshd_pid=""
 if [ -f /run/sshd.pid ]; then
     sshd_pid="$(< /run/sshd.pid)"
 fi
-if [[ "${sshd_pid}" =~ ^[0-9]+$ ]] && kill -0 "${sshd_pid}" 2>/dev/null; then
+# The pidfile outlives sshd, and its PID can be recycled by an unrelated
+# process, so /proc/<pid>/comm confirms the target is sshd before signalling it.
+if [[ "${sshd_pid}" =~ ^[0-9]+$ ]] &&
+    [ "$(cat "/proc/${sshd_pid}/comm" 2>/dev/null || true)" = "sshd" ]; then
     # SIGHUP re-execs sshd with the new drop-in and keeps established sessions
     # alive, so rerunning `up` never drops an open Zed connection.
     kill -HUP "${sshd_pid}"
@@ -103,11 +135,11 @@ elif [ -d /run/systemd/system ]; then
     systemctl enable ssh >/dev/null 2>&1 || true
     systemctl start ssh.socket >/dev/null 2>&1 ||
         systemctl start ssh >/dev/null 2>&1 ||
-        /usr/sbin/sshd
+        start_sshd
 else
     # Container Machine 1.1.0 can leave systemd unavailable, so sshd is started
     # directly.
-    /usr/sbin/sshd
+    start_sshd
 fi
 
 printf 'isolated-dev: guest user %s (%s:%s) configured\n' "${username}" "${uid}" "${gid}"
