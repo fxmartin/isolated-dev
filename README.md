@@ -5,8 +5,132 @@ environments powered by Apple Container Machine. Project source stays on macOS;
 toolchains, Docker Engine, Docker Compose, and application services run in the
 guest.
 
-The MVP is under active development. See [REQUIREMENTS.md](REQUIREMENTS.md) and
-[STORIES.md](STORIES.md) for scope and progress.
+It ships as one self-contained binary. See [REQUIREMENTS.md](REQUIREMENTS.md)
+and [STORIES.md](STORIES.md) for scope and progress, and
+[docs/releasing.md](docs/releasing.md) for how a release is built and what its
+signing status is today.
+
+## Requirements
+
+On the Mac that runs `isolated-dev`:
+
+- Apple silicon running macOS 26 or newer.
+- [Apple Container](https://github.com/apple/container) 1.x, with its services
+  started (`container system start`).
+- An SSH key pair; `up` installs your public keys into the guest and refuses to
+  create a machine without a usable one. Create one with `ssh-keygen -t ed25519`.
+- [Zed](https://zed.dev) with its `zed` command on `PATH`, for `open` only.
+  Install it from Zed's command palette with `cli: install cli`.
+- Internet access on the first `up` of a base-image version, which downloads
+  the Ubuntu packages and images the guest is built from.
+
+Nothing else. The binary is statically linked against macOS system libraries
+alone, so no Go toolchain, language runtime, package manager, or host Docker
+installation is required — Docker Engine and Compose run inside the guest,
+which is the point. The guest toolchain your project needs is declared in
+`packages` and installed in the machine, not on macOS.
+
+## Install
+
+Download the Apple-silicon archive and its checksum from the
+[releases page](https://github.com/fxmartin/isolated-dev/releases), verify it,
+and put the binary on your `PATH`:
+
+```sh
+shasum -a 256 -c isolated-dev-<version>-darwin-arm64.tar.gz.sha256
+tar -xzf isolated-dev-<version>-darwin-arm64.tar.gz
+install -m 0755 isolated-dev /usr/local/bin/isolated-dev
+isolated-dev --version
+```
+
+Releases are not yet signed or notarized, so a binary downloaded through a
+browser carries macOS's quarantine attribute and Gatekeeper refuses to run it.
+Remove the attribute deliberately, after you have verified the checksum above:
+
+```sh
+xattr -d com.apple.quarantine /usr/local/bin/isolated-dev
+```
+
+`curl` does not set that attribute, so a `curl`-downloaded archive needs no
+such step. [docs/releasing.md](docs/releasing.md) documents what signing and
+notarization would require, and why neither is silently worked around here.
+
+To build from source instead — which needs the Go toolchain, and only for the
+build:
+
+```sh
+scripts/release.sh --version 0.0.0-local
+```
+
+## Commands
+
+Every command takes the path of a Git repository and resolves it to one stable
+project machine. All of them are safe to repeat: they reconcile toward the
+declared state rather than assuming what they last left behind.
+
+| Command | Effect |
+| --- | --- |
+| `isolated-dev up PROJECT` | Create or restart the machine and reconcile its image, resources, guest account, SSH host, and port tunnels. Starts no services. |
+| `isolated-dev open PROJECT` | Everything `up` does, then open the mounted project in Zed over SSH. |
+| `isolated-dev run PROJECT COMMAND` | Run one command declared in `[commands.<name>]` inside the guest. Nothing undeclared runs. |
+| `isolated-dev status PROJECT` | Report configuration, machine, base image, mount, guest identity, SSH, and tunnel state. Read-only; changes nothing. |
+| `isolated-dev stop PROJECT` | Stop the machine, preserving it and all persistent guest data. |
+| `isolated-dev upgrade PROJECT` | Preview recreating the machine on a newer base image. Changes nothing. |
+| `isolated-dev upgrade --yes PROJECT` | Recreate the machine on the configured base image, discarding guest-only state. |
+| `isolated-dev destroy --yes PROJECT` | Remove the machine, its persistent data, its SSH host block, and local state. |
+| `isolated-dev --version` | Print the version this binary was built from. |
+
+A typical first session:
+
+```sh
+container system start
+isolated-dev up ~/dev/app       # create the machine
+isolated-dev status ~/dev/app   # confirm what was applied
+isolated-dev open ~/dev/app     # edit it in Zed
+isolated-dev run ~/dev/app dev  # start the declared DEV stack
+isolated-dev stop ~/dev/app     # end of day; data survives
+```
+
+### Destructive operations
+
+Two commands can destroy data, and neither ever acts on the bare verb. Both
+require `--yes` in the same invocation; there is no interactive prompt, because
+a prompt is not something an automated caller can be trusted to have answered.
+
+- `destroy --yes` removes the project machine and everything that lives only
+  inside it. It verifies both the canonical repository path and the derived
+  machine name first, so it cannot delete a machine belonging to another
+  project. Your macOS source is mounted, not copied, and is never touched.
+- `upgrade --yes` recreates the machine on a new base image, which discards
+  guest packages, Docker images and build cache, Compose volumes and their
+  contents, and the guest home outside the mounted project. The bare
+  `upgrade` preview lists exactly that before you commit to it, and every
+  precondition is checked — and the target image built — before the existing
+  machine is removed.
+
+### Warnings you should expect
+
+`up` reports these on standard error and continues; each names a condition on
+the host that `isolated-dev` will not silently decide for you:
+
+- `warning: this machine receives read-write access to your full home
+  directory` — the Apple Container 1.x mount scope. Every `up` says so, because
+  it is the security property most worth not forgetting. See
+  [Project Machine Lifecycle](#project-machine-lifecycle).
+- `warning: the mounted project at ... is not owned by ...` — files you create
+  in Linux may not match your macOS ownership. See
+  [Guest Identity and Credentials](#guest-identity-and-credentials).
+- `warning: referenced secret file ... is not present in the project` — a
+  `secrets.files` entry that is missing or cannot be checked. Its contents are
+  never read either way.
+- `warning: ...: macOS port ... is already in use` — that mapping is not
+  forwarded; free the port and rerun `up`. See
+  [Localhost Port Tunnels](#localhost-port-tunnels).
+
+Some conditions are errors rather than warnings, and stop before any machine or
+guest state changes: a repository outside your home directory, no usable SSH
+public key, an unmanaged `base_image`, an invalid or unknown configuration key,
+and an inline secret value.
 
 ## Configuration
 
@@ -393,6 +517,18 @@ go vet ./...
 go run ./cmd/isolated-dev --version
 go run ./cmd/isolated-dev status .
 ```
+
+[`scripts/release.sh`](scripts/release.sh) runs those checks and then builds,
+verifies, and packages the distributable binary. CI runs the same script, so a
+release is reproducible locally; `--dry-run` prints the steps it would take:
+
+```sh
+scripts/release.sh --dry-run
+scripts/release.sh --version 0.0.0-local
+```
+
+See [docs/releasing.md](docs/releasing.md) for cutting a release and for the
+signing, notarization, and Gatekeeper requirements.
 
 Run the destructive host-backed lifecycle test only on a disposable Apple
 Container development host. It creates and removes one uniquely named project

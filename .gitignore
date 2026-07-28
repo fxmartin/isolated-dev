@@ -8,3 +8,6 @@
 # Local experiment output
 .artifacts/
 .tmp/
+
+# Release build output
+dist/
