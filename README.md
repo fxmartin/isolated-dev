@@ -510,6 +510,40 @@ ISOLATED_DEV_RUN_HOST_TESTS=1 go test ./internal/forge \
   -run TestHostRunsTheUnmodifiedForgeDevStack -count=1 -v -timeout 70m
 ```
 
+The Forge persistence run proves the day after startup rather than startup
+itself. It brings the DEV stack up, then stops and restarts the project machine
+through `stop` and `up` and checks that:
+
+- the `rosetta-db-dev` and `rosetta-data-dev` named volumes come back as the
+  same volumes — same driver, mount point, and Docker creation timestamp — still
+  holding everything they held before, so a restart never silently reinitialises
+  the database;
+- macOS ports 3001 and 8001 answer while no CLI command is running, refuse
+  connections once the machine is stopped, and answer again through the tunnel
+  the restart reconciles, whatever address the machine came back on. Only a
+  refused connection counts as released: a port that answers anything at all,
+  including an error status, is still held by something;
+- an edit macOS writes into the mounted repository is readable in Linux as the
+  provisioned guest user, a file that user creates is readable from macOS, and
+  both carry the developer's own ownership on both sides;
+- the cached restart meets the 30-second machine and 2-minute stack readiness
+  targets. A missed target is reported as a finding about the host rather than
+  as a broken environment, and the test names it.
+
+Like the acceptance run it owns nothing and removes nothing: the machine, the
+containers, and the named volumes holding real data are left as they were found.
+The only things it writes into the repository are two marker files, which it
+refuses to create if the names are already taken and removes from both sides of
+the mount on every path, including a failing one. It restarts the Forge DEV
+stack, so run it only where that is what you want to happen — and a run that
+fails between `stop` and `up` leaves the machine stopped, which it says, naming
+the `isolated-dev up` that brings the stack back:
+
+```sh
+ISOLATED_DEV_RUN_HOST_TESTS=1 go test ./internal/forge \
+  -run TestHostKeepsForgeUsableAcrossARestart -count=1 -v -timeout 100m
+```
+
 The Zed check is not destructive and needs no machine. It resolves the real
 `zed` CLI the way `open` does, confirms the installed build is invocable, and
 verifies the `ssh://` target decodes back to exactly the managed alias and guest
