@@ -172,6 +172,9 @@ func TestReleaseRejectsUnusableInvocations(t *testing.T) {
 		{name: "output directory without a value", args: []string{"--output-dir"}},
 		{name: "version that is not a single token", args: []string{"--version", "1.2.3 dirty"}},
 		{name: "version that is a path", args: []string{"--version", "../1.2.3"}},
+		{name: "version given another flag as its value", args: []string{"--version", "--skip-checks"}},
+		{name: "output directory given another flag as its value", args: []string{"--output-dir", "--skip-checks"}},
+		{name: "version that begins with a dash", args: []string{"--version", "-1.2.3"}},
 		{name: "positional argument", args: []string{"1.2.3"}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

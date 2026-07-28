@@ -193,6 +193,44 @@ func TestReleaseTreatsAnEmptyVersionFlagAsUnset(t *testing.T) {
 	requireContains(t, "plan", result.stdout, "isolated-dev-3.1.4-darwin-arm64.tar.gz")
 }
 
+// TestReleaseRefusesToSwallowAFlagAsAValue covers the misuse that fails worst:
+// `--version $TAG --dry-run` with an unset, unquoted `$TAG`. Accepting the next
+// token unconditionally would take `--dry-run` as the version, and the run that
+// was meant to print a plan would instead build, verify, and package a real
+// artifact stamped with a flag name. The value-taking flags must fail before
+// anything is produced.
+func TestReleaseRefusesToSwallowAFlagAsAValue(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		args []string
+	}{
+		{name: "version swallows the dry run", args: []string{"--version", "--dry-run"}},
+		{name: "output directory swallows the dry run", args: []string{"--output-dir", "--dry-run"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			outputDir := t.TempDir()
+			args := append([]string{"--skip-checks"}, testCase.args...)
+			result := runScript(t, []string{"ISOLATED_DEV_VERSION="},
+				append(args, "--output-dir", outputDir)...)
+
+			if result.exitCode != 2 {
+				t.Fatalf("exit code = %d, want 2; stdout: %s stderr: %s",
+					result.exitCode, result.stdout, result.stderr)
+			}
+			requireContains(t, "stderr", result.stderr, "needs a value")
+			requireContains(t, "stderr", result.stderr, "usage: release.sh")
+
+			entries, err := os.ReadDir(outputDir)
+			if err != nil {
+				t.Fatalf("read %s: %v", outputDir, err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("a rejected invocation still produced %d artifact(s) in %s", len(entries), outputDir)
+			}
+		})
+	}
+}
+
 // TestReleaseShortHelpFlagIsNotAnError keeps `-h` equivalent to `--help`, since
 // it is the form a developer reaches for first.
 func TestReleaseShortHelpFlagIsNotAnError(t *testing.T) {

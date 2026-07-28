@@ -39,6 +39,7 @@ Useful flags:
 - `--skip-checks` builds only. For iterating on the build itself — never for a
   published release, and the script says so on standard error.
 - `--output-dir DIR` writes elsewhere than `dist/`.
+- `--help` (or `-h`) prints the usage line and the flags.
 - The version defaults to `$ISOLATED_DEV_VERSION`, then to
   `git describe --tags --always --dirty`. A leading `v` is always stripped, so
   tag `v1.4.0` produces a binary reporting `1.4.0`.

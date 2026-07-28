@@ -9,7 +9,7 @@
 #   scripts/release.sh --version 1.4.0
 #   scripts/release.sh --dry-run
 #
-# usage: release.sh [--version VERSION] [--output-dir DIR] [--skip-checks] [--dry-run]
+# usage: release.sh [--version VERSION] [--output-dir DIR] [--skip-checks] [--dry-run] [--help]
 #
 #   --version VERSION  version to stamp into the binary; a leading `v` is
 #                      stripped. Defaults to $ISOLATED_DEV_VERSION, then to
@@ -20,6 +20,7 @@
 #                      suite. For iterating on the build itself; never for a
 #                      published release.
 #   --dry-run          print the ordered steps instead of running them.
+#   --help, -h         print this usage line.
 
 set -euo pipefail
 
@@ -39,7 +40,7 @@ die() {
 }
 
 usage() {
-	printf 'usage: release.sh [--version VERSION] [--output-dir DIR] [--skip-checks] [--dry-run]\n'
+	printf 'usage: release.sh [--version VERSION] [--output-dir DIR] [--skip-checks] [--dry-run] [--help]\n'
 }
 
 usage_error() {
@@ -63,16 +64,28 @@ step() {
 	"$@"
 }
 
+# require_value guards a flag that takes an argument. Checking only that an
+# argument follows is not enough: `--version --dry-run` would consume the very
+# flag that was meant to keep the run from producing anything, so a value that
+# looks like a flag is a mistake rather than a value.
+require_value() {
+	local flag="$1"
+	local count="$2"
+	local value="${3-}"
+	((count >= 2)) || usage_error "$flag needs a value"
+	[[ "$value" != -* ]] || usage_error "$flag needs a value, but was given the flag $value"
+}
+
 parse_arguments() {
 	while (($# > 0)); do
 		case "$1" in
 		--version)
-			[[ $# -ge 2 ]] || usage_error "--version needs a value"
+			require_value --version "$#" "${2-}"
 			version="$2"
 			shift 2
 			;;
 		--output-dir)
-			[[ $# -ge 2 ]] || usage_error "--output-dir needs a value"
+			require_value --output-dir "$#" "${2-}"
 			output_dir="$2"
 			shift 2
 			;;
@@ -108,7 +121,9 @@ resolve_version() {
 	resolved="${resolved#v}"
 	# The version becomes part of a file name and of the binary's own output,
 	# so anything that is not a single plain token is a mistake worth naming.
-	[[ "$resolved" =~ ^[A-Za-z0-9._+-]+$ ]] ||
+	# A leading dash is excluded for the same reason a file name would not want
+	# one: it reads as a flag wherever the version is passed on.
+	[[ "$resolved" =~ ^[A-Za-z0-9._+][A-Za-z0-9._+-]*$ ]] ||
 		usage_error "version must be a single token of letters, digits, and .+-_ : $resolved"
 	[[ "$resolved" != .* ]] || usage_error "version must not start with a dot: $resolved"
 
