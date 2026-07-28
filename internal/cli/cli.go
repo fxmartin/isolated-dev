@@ -13,6 +13,8 @@ type Dependencies struct {
 	Up      func(string) error
 	Stop    func(string) error
 	Destroy func(string) error
+	// Open reconciles the project machine and opens it in Zed.
+	Open func(string) error
 	// Upgrade previews the base-image recreation, and performs it only when
 	// the confirmation is passed through.
 	Upgrade  func(string, bool) error
@@ -29,6 +31,9 @@ func Run(args []string, deps Dependencies) int {
 	}
 	if len(args) == 2 && args[0] == "up" {
 		return runCommand("up", args[1], deps.Up, deps, true)
+	}
+	if len(args) == 2 && args[0] == "open" {
+		return runCommand("open", args[1], deps.Open, deps, true)
 	}
 	if len(args) == 2 && args[0] == "stop" {
 		return runCommand("stop", args[1], deps.Stop, deps, true)
@@ -67,7 +72,7 @@ func Run(args []string, deps Dependencies) int {
 
 	fmt.Fprintln(
 		deps.Stderr,
-		"usage: isolated-dev <up PROJECT|status PROJECT|stop PROJECT|upgrade [--yes] PROJECT|destroy --yes PROJECT|--version>",
+		"usage: isolated-dev <up PROJECT|open PROJECT|status PROJECT|stop PROJECT|upgrade [--yes] PROJECT|destroy --yes PROJECT|--version>",
 	)
 	return 2
 }

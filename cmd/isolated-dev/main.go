@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"path/filepath"
 
 	"github.com/fxmartin/isolated-dev/internal/app"
 	"github.com/fxmartin/isolated-dev/internal/baseimage"
@@ -10,7 +11,9 @@ import (
 	"github.com/fxmartin/isolated-dev/internal/guest"
 	"github.com/fxmartin/isolated-dev/internal/host"
 	"github.com/fxmartin/isolated-dev/internal/machine"
+	"github.com/fxmartin/isolated-dev/internal/sshconfig"
 	"github.com/fxmartin/isolated-dev/internal/state"
+	"github.com/fxmartin/isolated-dev/internal/zed"
 )
 
 var version = "dev"
@@ -19,6 +22,11 @@ func main() {
 	store, err := state.DefaultStore()
 	if err != nil {
 		os.Stderr.WriteString("isolated-dev: " + err.Error() + "\n")
+		os.Exit(1)
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		os.Stderr.WriteString("isolated-dev: resolve home directory: " + err.Error() + "\n")
 		os.Exit(1)
 	}
 	runner := baseimage.ExecRunner{}
@@ -36,6 +44,9 @@ func main() {
 		MachineManager:   machineManager,
 		GuestProvisioner: guest.Provisioner{Runner: runner},
 		ImageEnsurer:     imageManager,
+		AddressResolver:  machineManager,
+		SSHConfig:        sshconfig.Manager{SSHDir: filepath.Join(homeDir, ".ssh")},
+		Zed:              zed.Launcher{Runner: runner},
 		WarningOutput:    os.Stderr,
 	}
 	os.Exit(cli.Run(os.Args[1:], cli.Dependencies{
@@ -47,6 +58,9 @@ func main() {
 		},
 		Up: func(path string) error {
 			return application.Up(context.Background(), path, os.Stdout)
+		},
+		Open: func(path string) error {
+			return application.Open(context.Background(), path, os.Stdout)
 		},
 		Stop: func(path string) error {
 			return application.Stop(context.Background(), path)

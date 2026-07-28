@@ -15,6 +15,7 @@ import (
 	"github.com/fxmartin/isolated-dev/internal/host"
 	"github.com/fxmartin/isolated-dev/internal/machine"
 	"github.com/fxmartin/isolated-dev/internal/project"
+	"github.com/fxmartin/isolated-dev/internal/sshconfig"
 	"github.com/fxmartin/isolated-dev/internal/state"
 	statusview "github.com/fxmartin/isolated-dev/internal/status"
 )
@@ -29,6 +30,25 @@ type GuestProvisioner interface {
 	Provision(context.Context, guest.Request) (guest.Result, error)
 }
 
+// AddressResolver reports the address at which macOS reaches a project machine.
+// A machine can move between restarts, so it is resolved on every `up`.
+type AddressResolver interface {
+	Address(context.Context, machine.Target) (string, error)
+}
+
+// SSHConfigurator maintains the managed SSH host that Zed and ordinary SSH
+// sessions connect through.
+type SSHConfigurator interface {
+	Apply(sshconfig.Entry) error
+	Remove(alias string) error
+	ForgetHostKey(alias string) error
+}
+
+// ZedLauncher opens a guest path over the managed SSH host.
+type ZedLauncher interface {
+	Open(ctx context.Context, alias string, guestPath string) error
+}
+
 type App struct {
 	Version          string
 	HostChecker      host.Checker
@@ -37,9 +57,12 @@ type App struct {
 	GuestProvisioner GuestProvisioner
 	// ImageEnsurer builds the target base image before `upgrade` destroys the
 	// machine it is replacing.
-	ImageEnsurer  ImageEnsurer
-	HomeDir       string
-	WarningOutput io.Writer
+	ImageEnsurer    ImageEnsurer
+	AddressResolver AddressResolver
+	SSHConfig       SSHConfigurator
+	Zed             ZedLauncher
+	HomeDir         string
+	WarningOutput   io.Writer
 	// ResolveIdentity defaults to the invoking macOS user.
 	ResolveIdentity func() (guest.Identity, error)
 }
@@ -80,6 +103,7 @@ func (app App) Status(ctx context.Context, projectPath string, output io.Writer)
 		snapshot.GuestUID = stored.GuestUID
 		snapshot.GuestGID = stored.GuestGID
 		snapshot.GuestProjectPath = stored.GuestProjectPath
+		snapshot.SSHAddress = stored.SSHAddress
 		snapshot.Config.Resources.CPUs = stored.CPUs
 		snapshot.Config.Resources.MemoryGB = stored.MemoryGB
 	} else if !errors.Is(err, state.ErrNotFound) {
@@ -119,6 +143,9 @@ func (app App) prepareUp(ctx context.Context, projectPath string) (upPreparation
 	if app.GuestProvisioner == nil {
 		return upPreparation{}, errors.New("guest provisioning is not configured")
 	}
+	if app.SSHConfig == nil || app.AddressResolver == nil {
+		return upPreparation{}, errors.New("SSH access is not configured")
+	}
 	if !baseimage.IsManagedReference(effectiveConfig.BaseImage) {
 		return upPreparation{}, fmt.Errorf(
 			"base image %q is not a managed isolated-dev image; refusing to grant it read-write access to the full home directory",
@@ -152,10 +179,26 @@ func (app App) prepareUp(ctx context.Context, projectPath string) (upPreparation
 	}, nil
 }
 
+// upOutcome describes the reconciled machine, which `open` uses to reach the
+// project without resolving it a second time.
+type upOutcome struct {
+	project          project.Project
+	guestProjectPath string
+}
+
 func (app App) Up(ctx context.Context, projectPath string, output io.Writer) error {
+	_, err := app.up(ctx, projectPath, output)
+	return err
+}
+
+func (app App) up(
+	ctx context.Context,
+	projectPath string,
+	output io.Writer,
+) (upOutcome, error) {
 	preparation, err := app.prepareUp(ctx, projectPath)
 	if err != nil {
-		return err
+		return upOutcome{}, err
 	}
 	resolved := preparation.project
 	effectiveConfig := preparation.config
@@ -163,10 +206,10 @@ func (app App) Up(ctx context.Context, projectPath string, output io.Writer) err
 	if err := app.warn(
 		"warning: this machine receives read-write access to your full home directory",
 	); err != nil {
-		return fmt.Errorf("write full-home mount warning: %w", err)
+		return upOutcome{}, fmt.Errorf("write full-home mount warning: %w", err)
 	}
 	if err := app.warnMissingSecretFiles(resolved.Path, effectiveConfig.Secrets); err != nil {
-		return err
+		return upOutcome{}, err
 	}
 	result, err := app.MachineManager.Up(ctx, machine.Request{
 		ProjectPath:      resolved.Path,
@@ -178,7 +221,7 @@ func (app App) Up(ctx context.Context, projectPath string, output io.Writer) err
 		MountScope:       "home",
 	})
 	if err != nil {
-		return err
+		return upOutcome{}, err
 	}
 	provisioned, err := app.GuestProvisioner.Provision(ctx, guest.Request{
 		MachineName: resolved.MachineName,
@@ -188,10 +231,14 @@ func (app App) Up(ctx context.Context, projectPath string, output io.Writer) err
 		PublicKeys:  preparation.publicKeys,
 	})
 	if err != nil {
-		return err
+		return upOutcome{}, err
 	}
-	if err := app.recordGuest(resolved.MachineName, provisioned); err != nil {
-		return err
+	address, err := app.reconcileSSH(ctx, resolved, provisioned, result.Created)
+	if err != nil {
+		return upOutcome{}, err
+	}
+	if err := app.recordConnection(resolved.MachineName, provisioned, address); err != nil {
+		return upOutcome{}, err
 	}
 	if !provisioned.OwnershipMatched {
 		if err := app.warn(
@@ -201,7 +248,7 @@ func (app App) Up(ctx context.Context, projectPath string, output io.Writer) err
 			provisioned.Identity.UID,
 			provisioned.Identity.GID,
 		); err != nil {
-			return fmt.Errorf("write mount ownership warning: %w", err)
+			return upOutcome{}, fmt.Errorf("write mount ownership warning: %w", err)
 		}
 	}
 
@@ -210,7 +257,7 @@ func (app App) Up(ctx context.Context, projectPath string, output io.Writer) err
 		outcome = "created"
 	}
 	if _, err := fmt.Fprintf(output, "%s %s\n", outcome, resolved.Path); err != nil {
-		return fmt.Errorf("write up summary: %w", err)
+		return upOutcome{}, fmt.Errorf("write up summary: %w", err)
 	}
 	if _, err := fmt.Fprintf(
 		output,
@@ -220,9 +267,55 @@ func (app App) Up(ctx context.Context, projectPath string, output io.Writer) err
 		provisioned.Identity.GID,
 		provisioned.GuestProjectPath,
 	); err != nil {
-		return fmt.Errorf("write guest summary: %w", err)
+		return upOutcome{}, fmt.Errorf("write guest summary: %w", err)
 	}
-	return nil
+	// The alias is a working `ssh` argument, and the address is what changed if
+	// a connection ever misbehaves.
+	if _, err := fmt.Fprintf(
+		output,
+		"ssh %s (%s@%s)\n",
+		resolved.MachineName,
+		provisioned.Identity.Username,
+		address,
+	); err != nil {
+		return upOutcome{}, fmt.Errorf("write SSH summary: %w", err)
+	}
+	return upOutcome{
+		project:          resolved,
+		guestProjectPath: provisioned.GuestProjectPath,
+	}, nil
+}
+
+// reconcileSSH points the managed SSH host at the machine's current address.
+// The address is resolved after provisioning, which is what starts sshd, and a
+// freshly created machine first loses the host keys recorded for the machine it
+// replaced: it answers under the same alias with a new key.
+func (app App) reconcileSSH(
+	ctx context.Context,
+	resolved project.Project,
+	provisioned guest.Result,
+	created bool,
+) (string, error) {
+	address, err := app.AddressResolver.Address(ctx, machine.Target{
+		ProjectPath: resolved.Path,
+		MachineName: resolved.MachineName,
+	})
+	if err != nil {
+		return "", err
+	}
+	if created {
+		if err := app.SSHConfig.ForgetHostKey(resolved.MachineName); err != nil {
+			return "", fmt.Errorf("forget the host keys of the replaced machine: %w", err)
+		}
+	}
+	if err := app.SSHConfig.Apply(sshconfig.Entry{
+		Alias:    resolved.MachineName,
+		HostName: address,
+		User:     provisioned.Identity.Username,
+	}); err != nil {
+		return "", fmt.Errorf("configure SSH access to %q: %w", resolved.MachineName, err)
+	}
+	return address, nil
 }
 
 func (app App) guestIdentity() (guest.Identity, error) {
@@ -232,9 +325,14 @@ func (app App) guestIdentity() (guest.Identity, error) {
 	return guest.ResolveIdentity()
 }
 
-// recordGuest persists the provisioned identity and mounted-project path so
-// `status` can report them without touching the machine.
-func (app App) recordGuest(machineName string, provisioned guest.Result) error {
+// recordConnection persists the provisioned identity, the mounted-project path,
+// and the address behind the managed SSH host so `status` can report them
+// without touching the machine.
+func (app App) recordConnection(
+	machineName string,
+	provisioned guest.Result,
+	address string,
+) error {
 	stored, err := app.StateStore.Load(machineName)
 	if err != nil {
 		return fmt.Errorf("load project state: %w", err)
@@ -243,6 +341,7 @@ func (app App) recordGuest(machineName string, provisioned guest.Result) error {
 	stored.GuestUID = provisioned.Identity.UID
 	stored.GuestGID = provisioned.Identity.GID
 	stored.GuestProjectPath = provisioned.GuestProjectPath
+	stored.SSHAddress = address
 	if err := app.StateStore.Save(stored); err != nil {
 		return fmt.Errorf("record guest identity: %w", err)
 	}
@@ -333,10 +432,21 @@ func (app App) Destroy(ctx context.Context, projectPath string) error {
 	if err != nil {
 		return err
 	}
-	return app.MachineManager.Destroy(ctx, machine.Target{
+	if app.SSHConfig == nil {
+		return errors.New("SSH access is not configured")
+	}
+	if err := app.MachineManager.Destroy(ctx, machine.Target{
 		ProjectPath: resolved.Path,
 		MachineName: resolved.MachineName,
-	})
+	}); err != nil {
+		return err
+	}
+	// The machine is gone, so its managed host and host keys are stale. Removal
+	// is idempotent, which keeps a repeated destroy safe.
+	if err := app.SSHConfig.Remove(resolved.MachineName); err != nil {
+		return fmt.Errorf("remove SSH access to %q: %w", resolved.MachineName, err)
+	}
+	return nil
 }
 
 func (app App) resolveForMutation(ctx context.Context, projectPath string) (project.Project, error) {

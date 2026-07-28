@@ -123,6 +123,57 @@ func TestWriteReportsGuestIdentityAndMountedProject(t *testing.T) {
 	}
 }
 
+func TestWriteReportsTheManagedSSHHost(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	if err := Write(&output, Snapshot{
+		MachineName: "isolated-dev-app-abcd1234",
+		GuestUser:   "fx",
+		SSHAddress:  "192.168.64.5",
+		Config:      config.Config{Resources: config.Resources{CPUs: 4, MemoryGB: 8}},
+	}); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	want := "SSH: isolated-dev-app-abcd1234 (fx@192.168.64.5)"
+	if got := output.String(); !strings.Contains(got, want) {
+		t.Errorf("status output missing %q:\n%s", want, got)
+	}
+}
+
+// State written before the guest identity was recorded still names a usable
+// host, so the login name is simply left out.
+func TestWriteReportsTheSSHHostWithoutAGuestUser(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	if err := Write(&output, Snapshot{
+		MachineName: "isolated-dev-app-abcd1234",
+		SSHAddress:  "192.168.64.5",
+	}); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	want := "SSH: isolated-dev-app-abcd1234 (192.168.64.5)"
+	if got := output.String(); !strings.Contains(got, want) {
+		t.Errorf("status output missing %q:\n%s", want, got)
+	}
+}
+
+func TestWriteReportsAnUnconfiguredSSHHost(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	if err := Write(&output, Snapshot{MachineName: "isolated-dev-app-abcd1234"}); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	if got := output.String(); !strings.Contains(got, "SSH: not-configured") {
+		t.Errorf("status output missing an unconfigured SSH host:\n%s", got)
+	}
+}
+
 func TestWriteReportsAnUnprovisionedGuest(t *testing.T) {
 	t.Parallel()
 

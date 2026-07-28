@@ -240,6 +240,11 @@ func TestUpReportsOutputFailures(t *testing.T) {
 			output: &writeAfter{failAfter: 1},
 			want:   "write guest summary",
 		},
+		{
+			name:   "ssh summary",
+			output: &writeAfter{failAfter: 2},
+			want:   "write SSH summary",
+		},
 	}
 
 	for _, test := range tests {
@@ -291,6 +296,7 @@ func TestStopAndDestroyRouteOnlyResolvedMachine(t *testing.T) {
 			application := App{
 				HostChecker:    passingHostChecker(),
 				MachineManager: lifecycle,
+				SSHConfig:      &sshStub{},
 			}
 			resolved, err := project.Resolve(repository)
 			if err != nil {
@@ -383,6 +389,7 @@ func TestDestroyPropagatesManagerFailure(t *testing.T) {
 		MachineManager: &lifecycleStub{
 			destroyErr: errors.New("delete failed"),
 		},
+		SSHConfig: &sshStub{},
 	}
 
 	err := application.Destroy(context.Background(), appRepository(t))

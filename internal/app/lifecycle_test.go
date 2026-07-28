@@ -92,6 +92,9 @@ func upApp(t *testing.T, home string, repository string, lifecycle MachineManage
 		MachineManager:   lifecycle,
 		GuestProvisioner: &guestStub{},
 		StateStore:       seededStateStore(t, repository),
+		AddressResolver:  &addressStub{},
+		SSHConfig:        &sshStub{},
+		Zed:              &zedStub{},
 		HomeDir:          home,
 		ResolveIdentity:  func() (guest.Identity, error) { return testIdentity, nil },
 	}
@@ -156,8 +159,13 @@ func TestUpResolvesProjectAndUsesEffectiveResources(t *testing.T) {
 	if request.ProjectPath != canonicalRepository {
 		t.Errorf("ProjectPath = %q, want %q", request.ProjectPath, canonicalRepository)
 	}
+	resolved, err := project.Resolve(repository)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
 	wantSummary := "created " + canonicalRepository + "\n" +
-		"guest fx (501:20) at " + canonicalRepository + "\n"
+		"guest fx (501:20) at " + canonicalRepository + "\n" +
+		"ssh " + resolved.MachineName + " (fx@192.168.64.5)\n"
 	if got := summary.String(); got != wantSummary {
 		t.Errorf("summary = %q, want %q", got, wantSummary)
 	}

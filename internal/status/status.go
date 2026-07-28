@@ -21,11 +21,14 @@ type Snapshot struct {
 	AvailableBaseImage string
 	MountScope         string
 	TunnelStatus       string
-	GuestUser          string
-	GuestUID           int
-	GuestGID           int
-	GuestProjectPath   string
-	Config             config.Config
+	// SSHAddress is the machine address recorded for the managed SSH host; it
+	// is empty until `up` configures one.
+	SSHAddress       string
+	GuestUser        string
+	GuestUID         int
+	GuestGID         int
+	GuestProjectPath string
+	Config           config.Config
 }
 
 const notProvisioned = "not-provisioned"
@@ -51,6 +54,23 @@ func baseImage(snapshot Snapshot) string {
 	)
 }
 
+// sshHost reports the managed SSH host Zed connects through. The alias is the
+// machine name, so it stays valid across the address changes a restart brings.
+func sshHost(snapshot Snapshot) string {
+	if snapshot.SSHAddress == "" {
+		return "not-configured"
+	}
+	if snapshot.GuestUser == "" {
+		return fmt.Sprintf("%s (%s)", snapshot.MachineName, snapshot.SSHAddress)
+	}
+	return fmt.Sprintf(
+		"%s (%s@%s)",
+		snapshot.MachineName,
+		snapshot.GuestUser,
+		snapshot.SSHAddress,
+	)
+}
+
 func orNotProvisioned(value string) string {
 	if value == "" {
 		return notProvisioned
@@ -66,6 +86,7 @@ func Write(writer io.Writer, snapshot Snapshot) error {
 		fmt.Sprintf("Machine: %s (%s)", snapshot.MachineName, snapshot.MachineStatus),
 		"Base image: " + baseImage(snapshot),
 		"Mount scope: " + snapshot.MountScope,
+		"SSH: " + sshHost(snapshot),
 		"Tunnel: " + snapshot.TunnelStatus,
 		"Guest user: " + guestUser(snapshot),
 		"Guest project: " + orNotProvisioned(snapshot.GuestProjectPath),

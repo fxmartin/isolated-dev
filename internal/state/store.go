@@ -26,6 +26,9 @@ type Project struct {
 	GuestUID         int    `json:"guest_uid,omitempty"`
 	GuestGID         int    `json:"guest_gid,omitempty"`
 	GuestProjectPath string `json:"guest_project_path,omitempty"`
+	// SSHAddress is the machine address the managed SSH host points at. It is
+	// reconciled on every `up`, because a restarted machine can move.
+	SSHAddress string `json:"ssh_address,omitempty"`
 }
 
 type Store struct {
