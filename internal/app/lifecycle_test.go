@@ -94,6 +94,7 @@ func upApp(t *testing.T, home string, repository string, lifecycle MachineManage
 		StateStore:       seededStateStore(t, repository),
 		AddressResolver:  &addressStub{},
 		SSHConfig:        &sshStub{},
+		Tunnels:          &tunnelStub{},
 		Zed:              &zedStub{},
 		HomeDir:          home,
 		ResolveIdentity:  func() (guest.Identity, error) { return testIdentity, nil },

@@ -297,6 +297,7 @@ func TestStopAndDestroyRouteOnlyResolvedMachine(t *testing.T) {
 				HostChecker:    passingHostChecker(),
 				MachineManager: lifecycle,
 				SSHConfig:      &sshStub{},
+				Tunnels:        &tunnelStub{},
 			}
 			resolved, err := project.Resolve(repository)
 			if err != nil {
@@ -364,6 +365,7 @@ func TestStopReportsMutationBoundaryFailures(t *testing.T) {
 				MachineManager: &lifecycleStub{
 					stopErr: errors.New("stop failed"),
 				},
+				Tunnels: &tunnelStub{},
 			},
 			want: "stop failed",
 		},
@@ -390,6 +392,7 @@ func TestDestroyPropagatesManagerFailure(t *testing.T) {
 			destroyErr: errors.New("delete failed"),
 		},
 		SSHConfig: &sshStub{},
+		Tunnels:   &tunnelStub{},
 	}
 
 	err := application.Destroy(context.Background(), appRepository(t))

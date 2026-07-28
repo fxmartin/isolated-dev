@@ -60,7 +60,10 @@ type App struct {
 	ImageEnsurer    ImageEnsurer
 	AddressResolver AddressResolver
 	SSHConfig       SSHConfigurator
-	Zed             ZedLauncher
+	// Tunnels keeps the configured guest ports reachable on macOS loopback
+	// after the CLI and Zed have exited.
+	Tunnels TunnelManager
+	Zed     ZedLauncher
 	// ProjectCommands executes explicitly declared project commands. It is used
 	// only by `run`: no lifecycle command ever reaches for it.
 	ProjectCommands ProjectCommandRunner
@@ -113,6 +116,12 @@ func (app App) Status(ctx context.Context, projectPath string, output io.Writer)
 		return fmt.Errorf("load project state: %w", err)
 	}
 
+	tunnelStatus, err := app.tunnelStatus(resolved.MachineName, snapshot.TunnelStatus)
+	if err != nil {
+		return err
+	}
+	snapshot.TunnelStatus = tunnelStatus
+
 	return statusview.Write(output, snapshot)
 }
 
@@ -148,6 +157,9 @@ func (app App) prepareUp(ctx context.Context, projectPath string) (upPreparation
 	}
 	if app.SSHConfig == nil || app.AddressResolver == nil {
 		return upPreparation{}, errors.New("SSH access is not configured")
+	}
+	if app.Tunnels == nil {
+		return upPreparation{}, errors.New("port forwarding is not configured")
 	}
 	if !baseimage.IsManagedReference(effectiveConfig.BaseImage) {
 		return upPreparation{}, fmt.Errorf(
@@ -282,6 +294,16 @@ func (app App) up(
 		address,
 	); err != nil {
 		return upOutcome{}, fmt.Errorf("write SSH summary: %w", err)
+	}
+	if err := app.reconcileTunnel(
+		resolved,
+		effectiveConfig,
+		address,
+		provisioned.Identity.Username,
+		result.Created,
+		output,
+	); err != nil {
+		return upOutcome{}, err
 	}
 	return upOutcome{
 		project:          resolved,
@@ -424,10 +446,18 @@ func (app App) Stop(ctx context.Context, projectPath string) error {
 	if err != nil {
 		return err
 	}
-	return app.MachineManager.Stop(ctx, machine.Target{
+	if app.Tunnels == nil {
+		return errors.New("port forwarding is not configured")
+	}
+	if err := app.MachineManager.Stop(ctx, machine.Target{
 		ProjectPath: resolved.Path,
 		MachineName: resolved.MachineName,
-	})
+	}); err != nil {
+		return err
+	}
+	// A stopped machine forwards nothing, so its tunnel goes with it. Removal
+	// is idempotent, which keeps a repeated stop safe.
+	return app.Tunnels.Remove(resolved.MachineName)
 }
 
 func (app App) Destroy(ctx context.Context, projectPath string) error {
@@ -438,10 +468,18 @@ func (app App) Destroy(ctx context.Context, projectPath string) error {
 	if app.SSHConfig == nil {
 		return errors.New("SSH access is not configured")
 	}
+	if app.Tunnels == nil {
+		return errors.New("port forwarding is not configured")
+	}
 	if err := app.MachineManager.Destroy(ctx, machine.Target{
 		ProjectPath: resolved.Path,
 		MachineName: resolved.MachineName,
 	}); err != nil {
+		return err
+	}
+	// The tunnel points at a machine that no longer exists, so its process goes
+	// first; repeating this stays safe.
+	if err := app.Tunnels.Remove(resolved.MachineName); err != nil {
 		return err
 	}
 	// The machine is gone, so its managed host and host keys are stale. Removal

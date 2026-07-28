@@ -14,6 +14,7 @@ import (
 	"github.com/fxmartin/isolated-dev/internal/projectcmd"
 	"github.com/fxmartin/isolated-dev/internal/sshconfig"
 	"github.com/fxmartin/isolated-dev/internal/state"
+	"github.com/fxmartin/isolated-dev/internal/tunnel"
 	"github.com/fxmartin/isolated-dev/internal/zed"
 )
 
@@ -28,6 +29,11 @@ func main() {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		os.Stderr.WriteString("isolated-dev: resolve home directory: " + err.Error() + "\n")
+		os.Exit(1)
+	}
+	tunnels, err := tunnel.DefaultManager()
+	if err != nil {
+		os.Stderr.WriteString("isolated-dev: " + err.Error() + "\n")
 		os.Exit(1)
 	}
 	runner := baseimage.ExecRunner{}
@@ -47,6 +53,7 @@ func main() {
 		ImageEnsurer:     imageManager,
 		AddressResolver:  machineManager,
 		SSHConfig:        sshconfig.Manager{SSHDir: filepath.Join(homeDir, ".ssh")},
+		Tunnels:          tunnels,
 		Zed:              zed.Launcher{Runner: runner},
 		ProjectCommands: projectcmd.Executor{
 			Runner:       projectcmd.ExecRunner{},
