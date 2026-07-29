@@ -184,9 +184,9 @@ root access or copied private keys.
 
 ##### Definition of Done
 
-- [ ] Code implemented and reviewed
-- [ ] Tests written and passing
-- [ ] Documentation updated
+- [x] Code implemented and reviewed
+- [x] Tests written and passing
+- [x] Documentation updated
 
 #### Story 01.6-001: Integrate Managed SSH Access with Zed
 
@@ -212,9 +212,9 @@ root access or copied private keys.
 
 ##### Definition of Done
 
-- [ ] Code implemented and reviewed
-- [ ] Tests written and passing
-- [ ] Documentation updated
+- [x] Code implemented and reviewed
+- [x] Tests written and passing
+- [x] Documentation updated
 
 #### Story 01.7-001: Manage Persistent Localhost Port Tunnels
 
@@ -240,9 +240,9 @@ root access or copied private keys.
 
 ##### Definition of Done
 
-- [ ] Code implemented and reviewed
-- [ ] Tests written and passing
-- [ ] Documentation updated
+- [x] Code implemented and reviewed
+- [x] Tests written and passing
+- [x] Documentation updated
 
 #### Story 01.8-001: Execute Only Explicit Project Commands
 
@@ -268,9 +268,9 @@ root access or copied private keys.
 
 ##### Definition of Done
 
-- [ ] Code implemented and reviewed
-- [ ] Tests written and passing
-- [ ] Documentation updated
+- [x] Code implemented and reviewed
+- [x] Tests written and passing
+- [x] Documentation updated
 
 #### Story 01.9-001: Provide Explicit Base-Image Upgrades
 
@@ -295,9 +295,9 @@ root access or copied private keys.
 
 ##### Definition of Done
 
-- [ ] Code implemented and reviewed
-- [ ] Tests written and passing
-- [ ] Documentation updated
+- [x] Code implemented and reviewed
+- [x] Tests written and passing
+- [x] Documentation updated
 
 #### Story 01.10-001: Automate the Baseline Nested-Compose Test
 
@@ -323,9 +323,9 @@ root access or copied private keys.
 
 ##### Definition of Done
 
-- [ ] Code implemented and reviewed
-- [ ] Tests written and passing
-- [ ] Documentation updated
+- [x] Code implemented and reviewed
+- [x] Tests written and passing
+- [x] Documentation updated
 
 #### Story 01.11-001: Run the Unmodified Forge DEV Stack
 
@@ -351,9 +351,9 @@ root access or copied private keys.
 
 ##### Definition of Done
 
-- [ ] Code implemented and reviewed
-- [ ] Tests written and passing
-- [ ] Documentation updated
+- [x] Code implemented and reviewed
+- [x] Tests written and passing
+- [x] Documentation updated
 
 #### Story 01.12-001: Validate Forge Persistence and Development Experience
 
@@ -381,9 +381,9 @@ root access or copied private keys.
 
 ##### Definition of Done
 
-- [ ] Code implemented and reviewed
-- [ ] Tests written and passing
-- [ ] Documentation updated
+- [x] Code implemented and reviewed
+- [x] Tests written and passing
+- [x] Documentation updated
 
 #### Story 01.13-001: Package and Document the MVP
 
@@ -411,9 +411,9 @@ root access or copied private keys.
 
 ##### Definition of Done
 
-- [ ] Code implemented and reviewed
-- [ ] Tests written and passing
-- [ ] Documentation updated
+- [x] Code implemented and reviewed
+- [x] Tests written and passing
+- [x] Documentation updated
 
 ## Dependencies
 
