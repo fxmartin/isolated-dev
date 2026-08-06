@@ -527,6 +527,9 @@ func TestDiagnosticsRecordCommandsThatThemselvesFail(t *testing.T) {
 func TestRunReportsFixturesItCannotWrite(t *testing.T) {
 	t.Parallel()
 
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses file permissions")
+	}
 	harness := newHarness(t)
 	if err := os.Chmod(harness.request.HomeDir, 0o555); err != nil {
 		t.Fatalf("Chmod() error = %v", err)
@@ -593,6 +596,9 @@ func TestRunReportsEveryTeardownFailure(t *testing.T) {
 func TestTeardownReportsFixturesItCannotRemove(t *testing.T) {
 	t.Parallel()
 
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses file permissions")
+	}
 	harness := newHarness(t)
 	// A fixture directory whose parent denies writes cannot be removed, which
 	// is exactly the leak teardown has to surface rather than swallow.
@@ -739,6 +745,9 @@ func TestWriteFixtureRejectsUnusableInputs(t *testing.T) {
 func TestWriteFixtureReportsFilesItCannotWrite(t *testing.T) {
 	t.Parallel()
 
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses file permissions")
+	}
 	dir := filepath.Join(t.TempDir(), "baseline")
 	if err := os.MkdirAll(dir, 0o555); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)

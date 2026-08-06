@@ -111,11 +111,20 @@ func isMarkedProcess(pid int, marker string) bool {
 	}
 	// -ww keeps a long forwarding command line from being truncated before the
 	// marker at its end.
-	output, err := exec.Command("/bin/ps", "-ww", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
+	output, err := exec.Command(
+		"/bin/ps", "-ww", "-o", "stat=", "-o", "command=", "-p", strconv.Itoa(pid),
+	).Output()
 	if err != nil {
 		return false
 	}
-	return strings.Contains(string(output), marker)
+	state, command, _ := strings.Cut(strings.TrimSpace(string(output)), " ")
+	// A zombie has exited and released its sockets; only its exit status lingers
+	// until a parent that may never wait collects it. Treating it as alive would
+	// make Stop wait forever on hosts where nothing reaps detached children.
+	if strings.HasPrefix(state, "Z") {
+		return false
+	}
+	return strings.Contains(command, marker)
 }
 
 // ProbeHostPort reports whether a macOS loopback port is free to forward to.

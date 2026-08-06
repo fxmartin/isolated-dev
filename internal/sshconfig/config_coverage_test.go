@@ -50,6 +50,9 @@ func TestApplyReportsHostSideFailures(t *testing.T) {
 		"developer configuration cannot be written": {
 			arrange: func(t *testing.T, manager Manager) {
 				t.Helper()
+				if os.Geteuid() == 0 {
+					t.Skip("root bypasses file permissions")
+				}
 				if err := os.MkdirAll(manager.managedDir(), 0o700); err != nil {
 					t.Fatalf("MkdirAll() error = %v", err)
 				}
@@ -66,6 +69,9 @@ func TestApplyReportsHostSideFailures(t *testing.T) {
 		"managed configuration is linked somewhere unwritable": {
 			arrange: func(t *testing.T, manager Manager) {
 				t.Helper()
+				if os.Geteuid() == 0 {
+					t.Skip("root bypasses file permissions")
+				}
 				if err := os.MkdirAll(manager.managedDir(), 0o700); err != nil {
 					t.Fatalf("MkdirAll() error = %v", err)
 				}
@@ -118,6 +124,9 @@ func TestRemoveReportsHostSideFailures(t *testing.T) {
 		"managed configuration cannot be rewritten": {
 			arrange: func(t *testing.T, manager Manager) {
 				t.Helper()
+				if os.Geteuid() == 0 {
+					t.Skip("root bypasses file permissions")
+				}
 				if err := manager.Apply(coverageEntry); err != nil {
 					t.Fatalf("Apply() error = %v", err)
 				}
@@ -165,6 +174,9 @@ func TestForgetHostKeyReportsHostSideFailures(t *testing.T) {
 		"managed lock cannot be opened": {
 			arrange: func(t *testing.T, manager Manager) {
 				t.Helper()
+				if os.Geteuid() == 0 {
+					t.Skip("root bypasses file permissions")
+				}
 				if err := os.MkdirAll(manager.managedDir(), 0o700); err != nil {
 					t.Fatalf("MkdirAll() error = %v", err)
 				}
@@ -178,6 +190,9 @@ func TestForgetHostKeyReportsHostSideFailures(t *testing.T) {
 		"known hosts cannot be rewritten": {
 			arrange: func(t *testing.T, manager Manager) {
 				t.Helper()
+				if os.Geteuid() == 0 {
+					t.Skip("root bypasses file permissions")
+				}
 				// Apply first, the way the tool always reaches this directory, so
 				// the managed lock exists before the directory is sealed.
 				if err := manager.Apply(coverageEntry); err != nil {
