@@ -196,6 +196,52 @@ files = ["config/.env"]
 	}
 }
 
+// Package names reach a root shell inside the guest, so only names Debian
+// itself would accept get past the configuration.
+func TestLoadValidatesDeclaredPackages(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"uppercase":        `packages = ["NodeJS"]`,
+		"leading dash":     `packages = ["-nope"]`,
+		"embedded space":   `packages = ["two words"]`,
+		"single character": `packages = ["g"]`,
+		"empty name":       `packages = [""]`,
+	}
+	for name, line := range cases {
+		line := line
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			projectDir := t.TempDir()
+			writeTestFile(t, filepath.Join(projectDir, SharedFileName), "version = 1\n"+line)
+
+			_, err := Load(projectDir)
+			if err == nil || !strings.Contains(err.Error(), "packages[0]") {
+				t.Fatalf("Load() error = %v, want the invalid package named", err)
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsValidPackageNames(t *testing.T) {
+	t.Parallel()
+
+	projectDir := t.TempDir()
+	writeTestFile(t, filepath.Join(projectDir, SharedFileName), `
+version = 1
+packages = ["golang-go", "python3-venv", "g++", "libstdc++6"]
+`)
+
+	loaded, err := Load(projectDir)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(loaded.Packages) != 4 || loaded.Packages[0] != "golang-go" {
+		t.Fatalf("packages = %#v, want the declared list preserved", loaded.Packages)
+	}
+}
+
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 

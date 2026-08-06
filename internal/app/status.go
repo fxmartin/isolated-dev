@@ -244,6 +244,7 @@ func (app App) up(
 		HomeDir:     canonicalHome,
 		Identity:    preparation.identity,
 		PublicKeys:  preparation.publicKeys,
+		Packages:    effectiveConfig.Packages,
 	})
 	if err != nil {
 		return upOutcome{}, err
@@ -283,6 +284,15 @@ func (app App) up(
 		provisioned.GuestProjectPath,
 	); err != nil {
 		return upOutcome{}, fmt.Errorf("write guest summary: %w", err)
+	}
+	if len(effectiveConfig.Packages) > 0 {
+		if _, err := fmt.Fprintf(
+			output,
+			"packages %s\n",
+			strings.Join(effectiveConfig.Packages, " "),
+		); err != nil {
+			return upOutcome{}, fmt.Errorf("write package summary: %w", err)
+		}
 	}
 	// The alias is a working `ssh` argument, and the address is what changed if
 	// a connection ever misbehaves.

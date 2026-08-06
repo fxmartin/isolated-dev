@@ -232,6 +232,43 @@ func TestUpRejectsUnmanagedBaseImageBeforeLifecycleMutation(t *testing.T) {
 	}
 }
 
+// Declared packages are part of what the guest converges on, so `up` hands
+// them to provisioning and names them in its summary.
+func TestUpInstallsDeclaredPackagesInTheGuest(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	repository := filepath.Join(home, "app")
+	if err := os.MkdirAll(filepath.Join(repository, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(repository, ".isolated-dev.toml"),
+		[]byte("version = 1\npackages = [\"golang-go\", \"python3-venv\"]\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	provisioner := &guestStub{}
+	var summary bytes.Buffer
+	application := upApp(t, home, repository, &lifecycleStub{})
+	application.GuestProvisioner = provisioner
+
+	if err := application.Up(context.Background(), repository, &summary); err != nil {
+		t.Fatalf("Up() error = %v", err)
+	}
+	if len(provisioner.requests) != 1 {
+		t.Fatalf("guest requests = %+v, want one", provisioner.requests)
+	}
+	packages := provisioner.requests[0].Packages
+	if len(packages) != 2 || packages[0] != "golang-go" || packages[1] != "python3-venv" {
+		t.Errorf("Packages = %#v, want the declared packages handed to provisioning", packages)
+	}
+	if !strings.Contains(summary.String(), "packages golang-go python3-venv\n") {
+		t.Errorf("summary = %q, want the converged packages named", summary.String())
+	}
+}
+
 func TestUpProvisionsTheGuestIdentityAndRecordsIt(t *testing.T) {
 	t.Parallel()
 

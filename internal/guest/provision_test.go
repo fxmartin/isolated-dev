@@ -304,6 +304,11 @@ func TestProvisionValidatesTheRequestBeforeTouchingTheGuest(t *testing.T) {
 			want:   "public key",
 		},
 		{
+			name:   "invalid package name",
+			mutate: func(request *Request) { request.Packages = []string{"two words"} },
+			want:   "package",
+		},
+		{
 			name:   "private key material",
 			mutate: func(request *Request) { request.PublicKeys = []string{privateKeyHeader} },
 			want:   "public key",
@@ -330,6 +335,111 @@ func TestProvisionValidatesTheRequestBeforeTouchingTheGuest(t *testing.T) {
 				t.Fatalf("guest commands = %#v, want none", recorder.calls)
 			}
 		})
+	}
+}
+
+// packagesCall returns the call that runs the package script, which announces
+// itself through the argv name the script is started under.
+func (runner *fakeRunner) packagesCall() (recordedCall, int) {
+	for index, call := range runner.calls {
+		for _, arg := range call.Args {
+			if arg == "isolated-dev-packages" {
+				return call, index
+			}
+		}
+	}
+	return recordedCall{}, -1
+}
+
+func TestProvisionInstallsDeclaredPackages(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{handle: statResponder(map[string]string{
+		hostProject + "/.git": "501:20",
+	})}
+	request := testRequest()
+	request.Packages = []string{"golang-go", "python3-venv"}
+
+	if _, err := (Provisioner{Runner: runner}).Provision(context.Background(), request); err != nil {
+		t.Fatalf("Provision() error = %v", err)
+	}
+
+	install, index := runner.packagesCall()
+	if index == -1 {
+		t.Fatal("no package installation command was run")
+	}
+	// The identity script owns the guest account; packages are converged for a
+	// guest that already exists.
+	if index != len(runner.calls)-1 {
+		t.Errorf("package installation ran at call %d, want after provisioning", index)
+	}
+	if install.Name != "container" {
+		t.Fatalf("command = %q, want the Apple Container CLI", install.Name)
+	}
+	joined := strings.Join(install.Args, " ")
+	for _, want := range []string{
+		"machine run --name isolated-dev-app-0123456789abcdef --root",
+		"/usr/bin/bash -c",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("install command %q missing %q", joined, want)
+		}
+	}
+	trailing := install.Args[len(install.Args)-2:]
+	if trailing[0] != "golang-go" || trailing[1] != "python3-venv" {
+		t.Errorf("package arguments = %#v, want the declared packages", trailing)
+	}
+	script := install.Args[len(install.Args)-4]
+	for _, want := range []string{
+		"dpkg-query",
+		"apt-get update",
+		"apt-get install -y --no-install-recommends",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("package script is missing %q", want)
+		}
+	}
+}
+
+func TestProvisionSkipsPackageInstallationWhenNoneAreDeclared(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{handle: statResponder(map[string]string{
+		hostProject + "/.git": "501:20",
+	})}
+
+	if _, err := (Provisioner{Runner: runner}).Provision(context.Background(), testRequest()); err != nil {
+		t.Fatalf("Provision() error = %v", err)
+	}
+	if _, index := runner.packagesCall(); index != -1 {
+		t.Errorf("call %d installs packages, want none for an empty declaration", index)
+	}
+}
+
+func TestProvisionReportsAFailedPackageInstallation(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{}
+	runner.handle = func(call recordedCall) ([]byte, error) {
+		if isStat(call) {
+			return []byte("501:20\n"), nil
+		}
+		for _, arg := range call.Args {
+			if arg == "isolated-dev-packages" {
+				return []byte("E: Unable to locate package no-such-tool"), errors.New("exit status 100")
+			}
+		}
+		return nil, nil
+	}
+	request := testRequest()
+	request.Packages = []string{"no-such-tool"}
+
+	_, err := Provisioner{Runner: runner}.Provision(context.Background(), request)
+	if err == nil || !strings.Contains(err.Error(), "install declared packages") {
+		t.Fatalf("Provision() error = %v, want the failed installation reported", err)
+	}
+	if !strings.Contains(err.Error(), "Unable to locate package") {
+		t.Errorf("error = %v, want the guest output carried for diagnosis", err)
 	}
 }
 
