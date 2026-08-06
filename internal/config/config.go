@@ -18,6 +18,12 @@ var environmentNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // `isolated-dev run` argument, so invoking one never depends on quoting.
 var commandNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
+// packageNamePattern admits exactly what Debian admits for a package name:
+// lower-case alphanumerics plus `+ - .`, at least two characters, starting
+// alphanumeric. The names reach a root shell inside the guest, so nothing
+// looser gets past the configuration.
+var packageNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]+$`)
+
 const (
 	SharedFileName     = ".isolated-dev.toml"
 	LocalFileName      = ".isolated-dev.local.toml"
@@ -210,6 +216,12 @@ func validate(cfg Config) error {
 			return fmt.Errorf("%s.host: %d is already forwarded by ports.%s", field, port.Host, owner)
 		}
 		hostPorts[port.Host] = port.Name
+	}
+
+	for index, name := range cfg.Packages {
+		if !packageNamePattern.MatchString(name) {
+			return fmt.Errorf("packages[%d]: invalid Ubuntu package name %q", index, name)
+		}
 	}
 
 	for _, name := range cfg.CommandNames() {

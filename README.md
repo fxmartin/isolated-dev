@@ -176,6 +176,14 @@ Each `[[ports]]` entry declares one forwarded mapping; see
 [Localhost Port Tunnels](#localhost-port-tunnels). Names must be unique, and so
 must `host` ports, because one macOS port can carry one forward.
 
+Each `packages` entry names an Ubuntu package that `up` installs inside the
+machine — the toolchain a plain Python, Go, or Node project needs without any
+Compose involvement. The step is idempotent: packages already present are left
+alone, so a repeated `up` is fast and needs no network; only the first install
+of a package downloads anything. Installed packages survive `stop`, and
+`upgrade --yes` recreates the machine through the same `up` path, so they are
+reinstalled on the new base image automatically.
+
 Use the Git-ignored `.isolated-dev.local.toml` only for local resources and host
 port overrides:
 

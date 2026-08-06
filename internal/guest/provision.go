@@ -14,7 +14,15 @@ import (
 //go:embed provision.sh
 var provisionScript string
 
+//go:embed packages.sh
+var packagesScript string
+
 var machineNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+
+// packageNamePattern mirrors the configuration-level check: the names become
+// arguments to a root shell inside the guest, so this boundary validates them
+// again rather than trusting its caller.
+var packageNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]+$`)
 
 // ownershipPattern matches the `stat -c %u:%g` output used to confirm that the
 // mounted project maps to the guest user rather than to root.
@@ -31,6 +39,9 @@ type Request struct {
 	HomeDir     string
 	Identity    Identity
 	PublicKeys  []string
+	// Packages are the Ubuntu packages the project declares; missing ones are
+	// installed after the guest identity is configured.
+	Packages []string
 }
 
 // Result reports the converged guest state.
@@ -90,12 +101,42 @@ func (provisioner Provisioner) Provision(
 			output,
 		)
 	}
+	if err := provisioner.installPackages(ctx, request); err != nil {
+		return Result{}, err
+	}
 
 	return Result{
 		Identity:         request.Identity,
 		GuestProjectPath: guestPath,
 		OwnershipMatched: matched,
 	}, nil
+}
+
+// installPackages converges the declared Ubuntu packages. The script installs
+// only what is missing, so a machine that already carries them is untouched
+// and no network is needed after the first install.
+func (provisioner Provisioner) installPackages(ctx context.Context, request Request) error {
+	if len(request.Packages) == 0 {
+		return nil
+	}
+	args := []string{
+		"machine", "run",
+		"--name", request.MachineName,
+		"--root",
+		"--",
+		"/usr/bin/bash", "-c", packagesScript, "isolated-dev-packages",
+	}
+	args = append(args, request.Packages...)
+	output, err := provisioner.Runner.Run(ctx, "container", args...)
+	if err != nil {
+		return fmt.Errorf(
+			"install declared packages on machine %q: %w\n%s",
+			request.MachineName,
+			err,
+			output,
+		)
+	}
+	return nil
 }
 
 // refuseGuestHomeMount stops provisioning when the macOS home is exposed at the
@@ -200,6 +241,11 @@ func (provisioner Provisioner) validate(request Request) (string, error) {
 	for _, key := range request.PublicKeys {
 		if err := validatePublicKey(key); err != nil {
 			return "", fmt.Errorf("authorized public key: %w", err)
+		}
+	}
+	for _, name := range request.Packages {
+		if !packageNamePattern.MatchString(name) {
+			return "", fmt.Errorf("invalid guest package name %q", name)
 		}
 	}
 
