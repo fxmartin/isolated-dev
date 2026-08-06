@@ -218,19 +218,33 @@ func TestReconcileSkipsAConflictingPortWithoutDisturbingTheListener(t *testing.T
 	defer listener.Close()
 	taken := listener.Addr().(*net.TCPAddr).Port
 
+	// The free mapping gets a port the kernel just proved available, because a
+	// fixed number could collide with whatever else runs on the host.
+	spare, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	free := Forward{Name: "api", Host: spare.Addr().(*net.TCPAddr).Port, Guest: 8000}
+	if err := spare.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
 	controller := newControllerStub()
 	manager := Manager{Root: t.TempDir(), Controller: controller}
 	occupied := Forward{Name: "web", Host: taken, Guest: 3000}
 
-	state, err := manager.Reconcile(testSpec(occupied, apiForward))
+	state, err := manager.Reconcile(testSpec(occupied, free))
 	if err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
 	if len(state.Unforwarded) != 1 || state.Unforwarded[0] != occupied {
 		t.Errorf("unforwarded = %+v, want the conflicting mapping reported", state.Unforwarded)
 	}
-	if len(state.Forwards) != 1 || state.Forwards[0] != apiForward {
+	if len(state.Forwards) != 1 || state.Forwards[0] != free {
 		t.Errorf("forwards = %+v, want the free mapping still forwarded", state.Forwards)
+	}
+	if len(controller.starts) != 1 {
+		t.Fatalf("starts = %v, want one tunnel carrying the free mapping", controller.starts)
 	}
 	joined := strings.Join(controller.starts[0], " ")
 	if strings.Contains(joined, fmt.Sprintf(":%d:", taken)) {
@@ -492,6 +506,9 @@ func TestReconcileReportsBoundaryFailures(t *testing.T) {
 func TestReconcileStopsATunnelItCannotRecord(t *testing.T) {
 	t.Parallel()
 
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses file permissions")
+	}
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o500); err != nil {
 		t.Fatalf("Chmod() error = %v", err)

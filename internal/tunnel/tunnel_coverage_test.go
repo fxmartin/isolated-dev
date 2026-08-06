@@ -103,6 +103,9 @@ func TestInspectUsesTheDefaultProcessController(t *testing.T) {
 func TestReconcileReportsATunnelItCanNeitherRecordNorStop(t *testing.T) {
 	t.Parallel()
 
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses file permissions")
+	}
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o500); err != nil {
 		t.Fatalf("Chmod() error = %v", err)
@@ -178,6 +181,9 @@ func TestReconcileReportsAStaleTunnelItCannotStop(t *testing.T) {
 func TestReconcileReportsAStaleRecordItCannotDelete(t *testing.T) {
 	t.Parallel()
 
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses file permissions")
+	}
 	root := t.TempDir()
 	manager := Manager{
 		Root:          root,
@@ -204,6 +210,9 @@ func TestReconcileReportsAStaleRecordItCannotDelete(t *testing.T) {
 func TestReconcileReportsAnUnrecordableConflict(t *testing.T) {
 	t.Parallel()
 
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses file permissions")
+	}
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o500); err != nil {
 		t.Fatalf("Chmod() error = %v", err)
@@ -309,6 +318,9 @@ func TestDefaultManagerReportsAnUnresolvableConfigurationDirectory(t *testing.T)
 func TestRemoveReportsAnUndeletableRecord(t *testing.T) {
 	t.Parallel()
 
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses file permissions")
+	}
 	root := t.TempDir()
 	manager := Manager{
 		Root:          root,

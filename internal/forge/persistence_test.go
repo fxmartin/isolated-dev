@@ -243,8 +243,12 @@ func newPersistenceHarness(t *testing.T) *persistenceHarness {
 			CommandName:      "dev",
 			Config:           forgeConfig(),
 		},
-		GuestUID: os.Getuid(),
-		GuestGID: os.Getgid(),
+		// The identity is what `up` records for the provisioned guest account, not
+		// whoever runs the tests: a root test runner would otherwise inject 0:0,
+		// which validation rightly refuses. The guest side is stubbed, so the
+		// fixed value round-trips unchanged.
+		GuestUID: 1000,
+		GuestGID: 1000,
 	}
 	return test
 }
