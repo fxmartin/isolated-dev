@@ -1,2 +1,35 @@
+# ABOUTME: Routes this repo's sdlc runs to the Codex harness (Story 20.7-005).
+# ABOUTME: Precedence: --harness flag > this file > registry default > built-in claude.
+#
+# Routing unchanged (`default: codex`, as this file already declared) — only the
+# documentation below is new, to match the other repos.
+#
+# Runs here dispatch through `scripts/codex-build-adapter.sh`, which feeds the
+# assembled prompt to `codex exec` and forwards the harness-neutral
+# <<<RESULT_JSON>>> contract back. Zero `claude` processes are spawned.
+#
+# Accepted trade-offs — codex declares these capabilities false in the registry:
+#   * no worktree isolation → stories build in the shared checkout, not per-story
+#     worktrees, so overlapping work is not physically separated
+#   * no parallel execution  → builds run serially regardless of --concurrency
+#   * no usage tracking      → no token/cost rows, so Epic-14's budget gate and
+#     Epic-28's predictor have nothing to meter or calibrate on for this repo
+#   * no rate-limit awareness → no auto-park/auto-resume on a quota window
+#
+# The model comes from your ~/.codex/config.toml, not from here — the adapter runs
+# plain `codex exec` with no `--model`, which is what keeps it working on any
+# authenticated Codex (issue #228). Per-stage model routing is opt-in in the
+# registry's `codex` entry.
+#
+# This repo is where issue #543 was reproduced: a resume re-resolved routing from
+# the current config instead of the run's frozen map, so a Codex run could finish on
+# Claude. Fixed in v2.42.9 for builds, and in v2.42.11 for `sdlc fix` (#551) — a
+# resume now replays the map frozen at run creation.
+#
+# Per-role overrides are available if a single role should stay on claude, e.g.:
+#   harness:
+#     default: codex
+#     roles:
+#       review: claude    # roles: build | coverage (alias: qa) | review | merge | docs
 harness:
   default: codex
